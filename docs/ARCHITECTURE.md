@@ -119,6 +119,12 @@ options are retrying (risking a duplicate post) or giving up (losing a real
 post). In this state nothing may publish; a reconciliation job asks the platform
 whether the idempotency key already produced a post, then settles the row.
 
+A retry carries the failure it is retrying, so the state machine refuses one
+that cannot succeed — an expired credential needs the user to reconnect, and
+retrying it would burn attempts and risk tripping platform abuse heuristics.
+Passing no failure means a person asked, and a person may retry whatever they
+like. This rule lives in the state machine rather than in each caller.
+
 Three layers guard against duplicate posts:
 
 1. Only a `scheduled` row may issue a publish call (`mayIssuePublishCall`).

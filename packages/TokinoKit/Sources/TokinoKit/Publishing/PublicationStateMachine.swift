@@ -110,7 +110,13 @@ public enum PublicationStateMachine {
         // ---- Retry ----
         // Back to `scheduled` rather than `publishing`: the scheduler re-claims
         // the row, which keeps claiming logic in exactly one place.
-        case (.failed, .retryRequested):
+        case (.failed, .retryRequested(let failure)):
+            // A failure that retrying cannot fix is refused here rather than
+            // left to each caller to remember. nil means a person asked, and a
+            // person may retry whatever they like.
+            if let failure, !failure.isRetryable {
+                return fail(.failureNotRetryable(failure.kind))
+            }
             return .success(.scheduled)
 
         // ---- Cancellation ----
@@ -124,12 +130,6 @@ public enum PublicationStateMachine {
             return .success(.cancelled)
 
         default:
-            // A retry asked for on a non-retryable failure gets a specific
-            // reason, because "illegal transition" would send a caller hunting
-            // the wrong bug.
-            if case .failed = state, case .retryRequested = event {
-                return fail(.illegalTransition)
-            }
             return fail(.illegalTransition)
         }
     }

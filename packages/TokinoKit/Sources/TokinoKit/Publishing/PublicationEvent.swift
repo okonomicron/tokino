@@ -39,7 +39,13 @@ public enum PublicationEvent: Sendable, Hashable {
     /// Reconciliation established that no post exists.
     case reconciledAsFailed(error: PublishFailure)
     /// A failed publication is being retried.
-    case retryRequested
+    ///
+    /// Carries the failure being retried so the state machine can refuse a
+    /// retry that cannot help — an expired credential needs the user to
+    /// reconnect, and retrying it burns attempts and can trip platform abuse
+    /// heuristics. Pass nil only for a user-initiated retry, where the person
+    /// has chosen to try again regardless.
+    case retryRequested(after: PublishFailure?)
     /// Withdrawn before publishing.
     case cancelled(reason: String?)
 }

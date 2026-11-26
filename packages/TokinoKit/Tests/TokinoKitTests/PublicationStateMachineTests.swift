@@ -35,7 +35,7 @@ struct PublicationStateMachineTests {
         .publishOutcomeUnknown(idempotencyKey: "key-1"),
         .reconciledAsPublished(remoteID: "ig-123"),
         .reconciledAsFailed(error: sampleFailure),
-        .retryRequested,
+        .retryRequested(after: nil),
         .cancelled(reason: "changed my mind")
     ]
 
@@ -67,7 +67,7 @@ struct PublicationStateMachineTests {
         (.publishing, .publishOutcomeUnknown(idempotencyKey: "k"), .awaitingReconciliation),
         (.awaitingReconciliation, .reconciledAsPublished(remoteID: "r"), .published),
         (.awaitingReconciliation, .reconciledAsFailed(error: sampleFailure), .failed),
-        (.failed, .retryRequested, .scheduled),
+        (.failed, .retryRequested(after: nil), .scheduled),
         (.failed, .cancelled(reason: nil), .cancelled),
         (.idea, .cancelled(reason: nil), .cancelled)
     ]
@@ -210,7 +210,7 @@ struct PublicationStateMachineTests {
 
         // A naive retry must be refused rather than producing a second post.
         let retry = PublicationStateMachine.transition(
-            from: state, on: .retryRequested, now: Self.now
+            from: state, on: .retryRequested(after: nil), now: Self.now
         )
         #expect(throws: PublicationStateMachine.TransitionError.self) { try retry.get() }
 
@@ -232,7 +232,51 @@ struct PublicationStateMachineTests {
         #expect(state == .failed)
         // Only now, having established nothing is live, may we retry.
         #expect(!state.mayHaveRemoteSideEffects)
-        state = try PublicationStateMachine.transition(from: state, on: .retryRequested, now: Self.now).get()
+        state = try PublicationStateMachine.transition(from: state, on: .retryRequested(after: nil), now: Self.now).get()
+        #expect(state == .scheduled)
+    }
+
+    /// Retrying a failure that cannot succeed burns attempts and can trip a
+    /// platform's abuse heuristics, so the state machine refuses it rather than
+    /// trusting every caller to check first.
+    @Test("a retry is refused for a failure that retrying cannot fix")
+    func nonRetryableFailureCannotBeRetried() {
+        let cases: [(PublishFailure.Kind, Bool)] = [
+            (.transient, true),
+            (.rateLimited, true),
+            (.authenticationExpired, false),
+            (.contentRejected, false),
+            (.internalError, false)
+        ]
+
+        for (kind, shouldBeAllowed) in cases {
+            let failure = PublishFailure(kind: kind, message: "m")
+            let result = PublicationStateMachine.transition(
+                from: .failed,
+                on: .retryRequested(after: failure),
+                now: Self.now
+            )
+
+            if shouldBeAllowed {
+                #expect((try? result.get()) == .scheduled, "\(kind) should be retryable")
+            } else {
+                guard case .failure(let error) = result else {
+                    Issue.record("\(kind) should not be retryable but was allowed")
+                    continue
+                }
+                #expect(error.reason == .failureNotRetryable(kind))
+                #expect(error.description.contains("cannot be retried"))
+            }
+        }
+    }
+
+    /// A person may retry whatever they like; the rule above is about the
+    /// scheduler acting on its own.
+    @Test("a user-initiated retry is allowed regardless of the failure kind")
+    func userInitiatedRetryIsAlwaysAllowed() throws {
+        let state = try PublicationStateMachine.transition(
+            from: .failed, on: .retryRequested(after: nil), now: Self.now
+        ).get()
         #expect(state == .scheduled)
     }
 
