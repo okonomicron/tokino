@@ -1,0 +1,55 @@
+# ---- Secrets: never commit. See docs/SECURITY.md ----
+.env
+.env.*
+!.env.example
+*.pem
+*.p8
+*.p12
+*.cer
+*.certSigningRequest
+*.mobileprovision
+*.provisionprofile
+service-account*.json
+**/secrets/
+
+# ---- Swift / SwiftPM ----
+.build/
+.swiftpm/
+Package.resolved.bak
+*.xcuserstate
+*.xcuserdatad/
+xcuserdata/
+
+# ---- Xcode ----
+*.xcworkspace/xcuserdata/
+DerivedData/
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+
+# ---- Node (tooling only) ----
+node_modules/
+
+# ---- OS / editor ----
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+
+# ---- Local artefacts ----
+/tmp/
+*.log
+coverage.xml
+.coverage

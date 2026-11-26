@@ -1,0 +1,111 @@
+name: CI
+
+# Linux CI: free, fast, and where most of the project's logic is verified.
+# The iOS app is built separately in ios.yml on a macOS runner.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tokinokit:
+    name: TokinoKit (Linux)
+    runs-on: ubuntu-latest
+    # Pinned to the toolchain this package was developed against. TokinoKit
+    # imports only Foundation, which is what makes Linux testing possible.
+    container: swift:6.4.3-noble
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Cache SwiftPM build
+        uses: actions/cache@v4
+        with:
+          path: packages/TokinoKit/.build
+          key: spm-${{ runner.os }}-6.4.3-${{ hashFiles('packages/TokinoKit/Package.swift') }}
+          restore-keys: spm-${{ runner.os }}-6.4.3-
+
+      - name: Build
+        working-directory: packages/TokinoKit
+        run: swift build --build-tests
+
+      - name: Test
+        working-directory: packages/TokinoKit
+        run: swift test
+
+  backend:
+    name: Backend and database
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        # Real pgvector, so embedding storage and nearest-neighbour queries are
+        # exercised rather than mocked.
+        image: pgvector/pgvector:0.8.7-pg16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: tokino_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        working-directory: backend
+        run: |
+          uv venv
+          uv pip install -e '.[dev]'
+
+      - name: Run tests
+        working-directory: backend
+        # The migration and RLS tests connect over TCP here rather than the
+        # unix socket used locally.
+        env:
+          PGSOCKET: localhost
+          PGPORT: "5432"
+          PGDATABASE: tokino_test
+          PGPASSWORD: postgres
+        run: .venv/bin/python -m pytest -q
+
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Full history: a credential removed in a later commit is still
+          # exposed in a public repository.
+          fetch-depth: 0
+
+      - name: Scan for committed credentials
+        run: ./scripts/scan-secrets.sh
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: astral-sh/ruff-action@v3
+        with:
+          args: check backend
+
+      - name: Validate the XcodeGen manifest
+        # Catches a malformed manifest here instead of burning a macOS job.
+        run: python3 -c "import yaml, sys; yaml.safe_load(open('ios/project.yml')); print('project.yml parses')"

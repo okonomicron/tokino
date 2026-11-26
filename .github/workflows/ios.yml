@@ -1,0 +1,73 @@
+name: iOS
+
+# Builds the app and runs simulator tests on a macOS runner.
+#
+# Standard GitHub-hosted runners are free for public repositories, which is why
+# this runs on every push. If the repository becomes private, included compute
+# is about 193 macOS minutes a month, so change the triggers below to
+# workflow_dispatch and tags only. See docs/IOS_BUILD.md.
+#
+# No Apple Developer Program membership is needed for anything here: signing and
+# TestFlight arrive in Milestone 3. Simulator builds are unsigned.
+on:
+  push:
+    branches: ["**"]
+    paths:
+      - "ios/**"
+      - "packages/**"
+      - ".github/workflows/ios.yml"
+  pull_request:
+    paths:
+      - "ios/**"
+      - "packages/**"
+  workflow_dispatch:
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build and test
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Show toolchain
+        # Recorded so a failure caused by a runner image change is obvious.
+        run: |
+          xcodebuild -version
+          xcrun simctl list runtimes | grep -i ios || true
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate the Xcode project
+        # The .xcodeproj is generated rather than committed, so it can be
+        # edited as text. See docs/IOS_BUILD.md.
+        working-directory: ios
+        run: |
+          xcodegen generate
+          test -d Tokino.xcodeproj
+
+      - name: Build and test on a simulator
+        working-directory: ios
+        # CODE_SIGNING_ALLOWED=NO because a simulator build needs no signing,
+        # and signing would require an Apple Developer account we do not yet have.
+        run: |
+          set -o pipefail
+          xcodebuild test \
+            -project Tokino.xcodeproj \
+            -scheme Tokino \
+            -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest' \
+            CODE_SIGNING_ALLOWED=NO \
+            | xcbeautify --renderer github-actions
+
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcresult
+          path: |
+            ~/Library/Developer/Xcode/DerivedData/**/Logs/Test/*.xcresult
+          retention-days: 5

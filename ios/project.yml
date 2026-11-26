@@ -1,0 +1,88 @@
+# XcodeGen manifest. The .xcodeproj is generated, not committed, so the project
+# can be edited as text in the cloud — see docs/IOS_BUILD.md.
+#
+# Regenerate with:  cd ios && xcodegen generate
+name: Tokino
+options:
+  bundleIdPrefix: co.shinruey.tokino
+  deploymentTarget:
+    # iOS 26 only, by decision: it makes BGContinuedProcessingTask available,
+    # which removes the need for a second scan path. See docs/DECISIONS.md.
+    iOS: "26.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    # Warnings are cheap to fix now and expensive to fix in bulk later.
+    SWIFT_TREAT_WARNINGS_AS_ERRORS: NO
+    GCC_TREAT_WARNINGS_AS_ERRORS: NO
+
+packages:
+  TokinoKit:
+    path: ../packages/TokinoKit
+
+targets:
+  Tokino:
+    type: application
+    platform: iOS
+    sources:
+      - path: Tokino
+        # XcodeGen writes the Info.plist into this tree; including it as a
+        # source would also copy it in as a resource.
+        excludes:
+          - "Resources/Info.generated.plist"
+    dependencies:
+      - package: TokinoKit
+        product: TokinoKit
+    info:
+      path: Tokino/Resources/Info.generated.plist
+      properties:
+        CFBundleDisplayName: Tokino
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        # Shown verbatim in the system permission dialog. The brief requires
+        # explaining why access is needed before asking (§2.2).
+        NSPhotoLibraryUsageDescription: >-
+          Tokino reads your photo library to find pictures worth posting about.
+          Photos stay on your device: only small numeric summaries and details
+          like dates and locations are sent to Tokino's servers, and a picture
+          itself is only uploaded when you approve a post that uses it.
+        # Must be declared or iOS rejects the identifier at submission time.
+        BGTaskSchedulerPermittedIdentifiers:
+          - co.shinruey.tokino.scan.continued
+          - co.shinruey.tokino.scan.catchup
+        UIBackgroundModes:
+          - processing
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: co.shinruey.tokino
+        TARGETED_DEVICE_FAMILY: "1"
+        GENERATE_INFOPLIST_FILE: NO
+
+  TokinoTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: TokinoTests
+    dependencies:
+      - target: Tokino
+      - package: TokinoKit
+        product: TokinoKit
+
+schemes:
+  Tokino:
+    build:
+      targets:
+        Tokino: all
+        TokinoTests: [test]
+    test:
+      gatherCoverageData: true
+      targets:
+        - TokinoTests
