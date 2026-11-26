@@ -255,9 +255,11 @@ public enum ScanPlanner {
         // Note: with limited photo-library access this also fires when the user
         // narrows their selection, which is the correct behaviour — we must not
         // retain an index for assets we can no longer see.
-        let toRemove = indexed
-            .map(\.localIdentifier)
-            .filter { !seenInLibrary.contains($0) }
+        // Deduplicated via a Set: a duplicate record in our own store would
+        // otherwise produce the same removal twice, inflating the caller's
+        // progress counts even though deleting twice is harmless.
+        let toRemove = Set(indexed.map(\.localIdentifier))
+            .subtracting(seenInLibrary)
             .sorted()
 
         return ScanPlan(

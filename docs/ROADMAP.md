@@ -13,15 +13,20 @@ checkpointing and provider abstraction; 19-table Supabase schema with RLS
 enabled and forced; FastAPI skeleton with the mock-refusal guard; Linux and
 macOS CI; secret scanning.
 
-**Test results:** 86 TokinoKit tests (Swift 6.4.3, Linux) and 51 backend tests
-(real Postgres 16 + pgvector 0.8.7) all passing. The iOS target is unverified —
-nothing has compiled it yet.
+**Authentication, precisely:** the brief lists this under M1, and what exists is
+the groundwork only — an `app_user` table mirroring `auth.users`, and every RLS
+policy written against `auth.uid()` so Supabase Auth drops straight in. There is
+**no sign-in flow**; that belongs with onboarding in M2. The migration provides a
+stand-in `auth.uid()` for CI and never replaces Supabase's own.
+
+**Test results:** 89 TokinoKit tests (Swift 6.4.3, Linux), 51 backend tests
+(real Postgres 16 + pgvector 0.8.7), and 5 iOS XCTest cases on an iOS 26
+simulator — all passing, locally and in CI.
 
 ## M2 — Photo discovery
 
 The first milestone with a usable app.
 
-- XcodeGen project built and tested on macOS CI (proves M1's iOS target).
 - Onboarding, with the privacy explanation before the permission prompt.
 - PhotoKit enumeration; `PHPersistentChangeToken` confirmed by compiling.
 - Scan via `BGContinuedProcessingTask` with a Live Activity.

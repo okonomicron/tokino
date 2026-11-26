@@ -187,6 +187,18 @@ struct ScanPlannerTests {
         #expect(plan.totalWorkItems == 0, "removals are not indexing work")
     }
 
+    /// A duplicate record in our own store must not yield the same removal
+    /// twice, or progress counts would overstate the work.
+    @Test("a duplicated index record yields one removal, not two")
+    func duplicateRecordsYieldOneRemoval() {
+        let indexed = [
+            Self.record("gone", indexedAt: Self.t0),
+            Self.record("gone", indexedAt: Self.t0.addingTimeInterval(60))
+        ]
+        let plan = ScanPlanner.plan(library: [], indexed: indexed, policy: Self.policy())
+        #expect(plan.toRemove == ["gone"])
+    }
+
     // MARK: - iCloud-only assets
 
     @Test("cloud-only assets are skipped rather than downloaded")

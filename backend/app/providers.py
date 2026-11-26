@@ -12,7 +12,7 @@ import enum
 from dataclasses import dataclass
 
 
-class Capability(str, enum.Enum):
+class Capability(enum.StrEnum):
     LANGUAGE_MODEL = "languageModel"
     PLACES = "places"
     PUBLISHING = "publishing"

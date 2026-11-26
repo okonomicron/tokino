@@ -21,7 +21,20 @@ do $$
 begin
   if not exists (select 1 from pg_namespace where nspname = 'auth') then
     create schema auth;
-    -- CI stand-in: reads the user id from a session setting that tests set.
+  end if;
+
+  -- Tests for the FUNCTION, not just the schema. Checking only the schema
+  -- would leave policies referencing a missing auth.uid() on any database that
+  -- has an `auth` schema for unrelated reasons, and every policy would then
+  -- fail at query time rather than here.
+  if not exists (
+    select 1
+    from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'auth' and p.proname = 'uid'
+  ) then
+    -- CI stand-in only. Supabase ships its own auth.uid(), which this never
+    -- replaces, because the function already exists there.
     execute $fn$
       create function auth.uid() returns uuid
       language sql stable

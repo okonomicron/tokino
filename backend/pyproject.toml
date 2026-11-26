@@ -28,3 +28,9 @@ markers = ["db: requires a Postgres test cluster"]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+
+[tool.ruff.lint]
+# Selected explicitly rather than left to ruff's defaults, so a new ruff
+# release cannot fail CI by enabling a rule we never opted into. CI pins the
+# ruff version too, so local and CI runs agree.
+select = ["E", "F", "I", "UP", "B", "RUF"]

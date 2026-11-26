@@ -104,6 +104,10 @@ jobs:
 
       - uses: astral-sh/ruff-action@v3
         with:
+          # Pinned so a new ruff release cannot fail CI on a rule the repo
+          # never opted into. backend/pyproject.toml selects the rules
+          # explicitly for the same reason.
+          version: "0.17.6"
           args: check backend
 
       - name: Validate the XcodeGen manifest

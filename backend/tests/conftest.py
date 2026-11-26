@@ -42,7 +42,7 @@ PG_SUPERUSER_PASSWORD = os.environ.get("PGPASSWORD", "")
 APP_ROLE = "tokino_app_test"
 # A throwaway credential for a local test cluster that never accepts external
 # connections. Not a secret, and deliberately obvious about that.
-APP_ROLE_PASSWORD = "not-a-secret-test-only"  # noqa: S105
+APP_ROLE_PASSWORD = "not-a-secret-test-only"
 
 ADMIN_DSN = (
     f"host={PG_HOST} port={PG_PORT} user=postgres dbname={PG_DB} "

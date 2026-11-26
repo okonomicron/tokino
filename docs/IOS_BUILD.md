@@ -84,19 +84,27 @@ Then in Xcode: Product → Xcode Cloud → Create Workflow. This also connects t
 repository. The App Store Connect API cannot do either step, which is the one
 genuine Mac dependency in the project.
 
-## What is not yet verified
+## Verification status
 
-**The iOS target has never been compiled.** Nothing in this container can build
-for iOS, and no macOS run has happened yet. So as of Milestone 1:
+As of Milestone 1, on run 3 of the iOS workflow:
 
-- `TokinoKit` is verified: 86 tests under Swift 6.4.3 on Linux.
-- `ios/project.yml` is verified only as well-formed YAML.
-- `ios/Tokino/**` and `ios/TokinoTests/**` are **unverified**. The first macOS
-  CI run is what will prove, or disprove, that they compile.
+- `TokinoKit`: **verified.** 89 tests under Swift 6.4.3 on Linux, locally and in CI.
+- `ios/project.yml`: **verified.** XcodeGen 2.48.0 generates the project.
+- `ios/Tokino/**` and `ios/TokinoTests/**`: **verified.** Compiled for
+  `arm64-apple-ios-simulator`, linked against TokinoKit, and all 5 XCTest cases
+  passed on an iOS 26 simulator. Build and test took 3m07s.
 
-This is exactly why the iOS target exists in Milestone 1 rather than Milestone 2:
-free macOS CI means SwiftUI gets compiled from its first line instead of
-accumulating unverified for weeks.
+Getting here took three runs, and the two failures were worth having:
 
-Background scanning cannot be verified in the simulator at all — background
-tasks do not run there. That waits for a TestFlight build on your iPhone in M3.
+1. TokinoKit declared `platforms: [.iOS(.v26)]` and tools version 6.2, which
+   forced the whole package to need Xcode 26 and failed against the runner's
+   default Xcode 16.4.
+2. A hardcoded `iPhone 17` destination, now replaced by discovery.
+
+Both were wrong assumptions about an environment this container cannot inspect,
+which is the argument for compiling early rather than accumulating unverified
+SwiftUI for weeks.
+
+**Still unverifiable here:** background scanning. Background tasks do not run in
+the simulator at all, so `BGContinuedProcessingTask` behaviour waits for a
+TestFlight build on a real iPhone in M3.

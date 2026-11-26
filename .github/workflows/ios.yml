@@ -81,6 +81,7 @@ jobs:
             -project Tokino.xcodeproj \
             -scheme Tokino \
             -destination 'platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}' \
+            -resultBundlePath TestResults.xcresult \
             CODE_SIGNING_ALLOWED=NO \
             | xcbeautify --renderer github-actions
 
@@ -89,6 +90,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: xcresult
-          path: |
-            ~/Library/Developer/Xcode/DerivedData/**/Logs/Test/*.xcresult
+          # An explicit -resultBundlePath rather than hunting through
+          # DerivedData, whose layout varies and which is empty when the build
+          # fails before running tests.
+          path: ios/TestResults.xcresult
           retention-days: 5
+          if-no-files-found: ignore
