@@ -33,11 +33,25 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Show toolchain
-        # Recorded so a failure caused by a runner image change is obvious.
+      - name: Select the newest Xcode
+        # The image's default Xcode is older than the iOS SDK the app needs:
+        # it shipped Xcode 16.4 (Swift 6.1) while carrying iOS 26 simulator
+        # runtimes. Selecting the newest installed Xcode gets the matching SDK
+        # without depending on a runner label that may not exist yet.
         run: |
+          newest=$(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V | tail -1)
+          if [ -z "$newest" ]; then
+            echo "No Xcode found in /Applications" >&2
+            exit 1
+          fi
+          sudo xcode-select -s "$newest/Contents/Developer"
+          echo "Selected $newest"
           xcodebuild -version
-          xcrun simctl list runtimes | grep -i ios || true
+          swift --version
+
+      - name: Show available simulator runtimes
+        # Recorded so a failure caused by a runner image change is obvious.
+        run: xcrun simctl list runtimes | grep -i ios || true
 
       - name: Install XcodeGen
         run: brew install xcodegen
@@ -50,6 +64,13 @@ jobs:
           xcodegen generate
           test -d Tokino.xcodeproj
 
+      - name: Choose a simulator
+        id: simulator
+        # Discovered rather than hardcoded: a device name like 'iPhone 17'
+        # breaks silently whenever the runner image changes its pre-created
+        # devices.
+        run: echo "udid=$(./scripts/ios-simulator-udid.sh 26)" >> "$GITHUB_OUTPUT"
+
       - name: Build and test on a simulator
         working-directory: ios
         # CODE_SIGNING_ALLOWED=NO because a simulator build needs no signing,
@@ -59,7 +80,7 @@ jobs:
           xcodebuild test \
             -project Tokino.xcodeproj \
             -scheme Tokino \
-            -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest' \
+            -destination 'platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}' \
             CODE_SIGNING_ALLOWED=NO \
             | xcbeautify --renderer github-actions
 

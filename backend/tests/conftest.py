@@ -1,8 +1,20 @@
 """Shared fixtures, including the Postgres test cluster wiring.
 
-Database tests run against a real Postgres with real pgvector, started by
-scripts/pg-test-cluster.sh. They skip rather than fail when no cluster is
-reachable, so `pytest` still works where one has not been started.
+Database tests run against a real Postgres with real pgvector. Two very
+different clusters have to work:
+
+- Locally, `scripts/pg-test-cluster.sh` starts a throwaway cluster with `trust`
+  auth over a unix socket, where passwords are ignored.
+- In CI, the `pgvector/pgvector` service container listens on TCP with
+  `scram-sha-256`, where a role without a password cannot connect at all.
+
+So the unprivileged test role is given an explicit password, and admin and app
+connections are separate fixtures rather than one DSN with the username
+substituted — substitution silently carried the wrong password across and only
+failed on the TCP cluster.
+
+Tests skip rather than fail when no cluster is reachable, so `pytest` still
+works with nothing running.
 """
 
 from __future__ import annotations
@@ -17,22 +29,34 @@ import pytest
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 MIGRATIONS_DIR = REPO_ROOT / "supabase" / "migrations"
 
-# Matches the defaults in scripts/pg-test-cluster.sh.
-PG_SOCKET = os.environ.get("PGSOCKET", "/tmp/tokino-pgsock")
+# Matches the defaults in scripts/pg-test-cluster.sh; CI overrides via env.
+PG_HOST = os.environ.get("PGSOCKET", "/tmp/tokino-pgsock")
 PG_PORT = os.environ.get("PGPORT", "55432")
 PG_DB = os.environ.get("PGDATABASE", "tokino_test")
+# Empty locally (trust auth ignores it); set to `postgres` by CI.
+PG_SUPERUSER_PASSWORD = os.environ.get("PGPASSWORD", "")
 
-SUPERUSER_DSN = f"host={PG_SOCKET} port={PG_PORT} user=postgres dbname={PG_DB}"
 # RLS is not enforced for superusers even with FORCE ROW LEVEL SECURITY, so
 # every policy test must connect as this unprivileged role. Testing as postgres
 # would pass vacuously and prove nothing.
 APP_ROLE = "tokino_app_test"
-APP_DSN = f"host={PG_SOCKET} port={PG_PORT} user={APP_ROLE} dbname={PG_DB}"
+# A throwaway credential for a local test cluster that never accepts external
+# connections. Not a secret, and deliberately obvious about that.
+APP_ROLE_PASSWORD = "not-a-secret-test-only"  # noqa: S105
+
+ADMIN_DSN = (
+    f"host={PG_HOST} port={PG_PORT} user=postgres dbname={PG_DB} "
+    f"password={PG_SUPERUSER_PASSWORD}"
+)
+APP_DSN = (
+    f"host={PG_HOST} port={PG_PORT} user={APP_ROLE} dbname={PG_DB} "
+    f"password={APP_ROLE_PASSWORD}"
+)
 
 
 def _cluster_available() -> bool:
     try:
-        with psycopg.connect(SUPERUSER_DSN, connect_timeout=3):
+        with psycopg.connect(ADMIN_DSN, connect_timeout=5):
             return True
     except (psycopg.Error, OSError):
         # psycopg raises OperationalError when nothing is listening; OSError
@@ -47,25 +71,32 @@ requires_db = pytest.mark.skipif(
 )
 
 
-def _migration_files() -> list[pathlib.Path]:
-    return sorted(MIGRATIONS_DIR.glob("*.sql"))
+@pytest.fixture(scope="session")
+def admin_dsn() -> str:
+    """Superuser connection string. Bypasses RLS, so never used to test policies."""
+    return ADMIN_DSN
 
 
 @pytest.fixture(scope="session")
-def migrated_database() -> str:
+def migrated_database(admin_dsn: str) -> str:
     """Applies every migration in order, then hands back the app-role DSN."""
-    with psycopg.connect(SUPERUSER_DSN, autocommit=True) as conn:
+    with psycopg.connect(admin_dsn, autocommit=True) as conn:
         # Start from a clean schema so a stale run cannot mask a broken migration.
         conn.execute("drop schema if exists public cascade")
         conn.execute("create schema public")
         conn.execute("drop schema if exists auth cascade")
 
-        for path in _migration_files():
+        for path in sorted(MIGRATIONS_DIR.glob("*.sql")):
             conn.execute(path.read_text())
 
         # An unprivileged role standing in for Supabase's `authenticated` role.
+        # The password is required on a password-authenticating cluster and
+        # harmlessly ignored on a trust-auth one.
         conn.execute(f"drop role if exists {APP_ROLE}")
-        conn.execute(f"create role {APP_ROLE} login nosuperuser nobypassrls")
+        conn.execute(
+            f"create role {APP_ROLE} login nosuperuser nobypassrls "
+            f"password '{APP_ROLE_PASSWORD}'"
+        )
         conn.execute(f"grant usage on schema public, auth to {APP_ROLE}")
         conn.execute(
             "grant select, insert, update, delete on all tables "
@@ -98,16 +129,14 @@ def as_user(migrated_database: str):
 
 
 @pytest.fixture
-def seeded_users(migrated_database: str):
+def seeded_users(migrated_database: str, admin_dsn: str):
     """Creates two distinct users with a device each, for isolation tests."""
     alice, bob = uuid.uuid4(), uuid.uuid4()
     devices: dict[uuid.UUID, uuid.UUID] = {}
 
-    with psycopg.connect(migrated_database.replace(APP_ROLE, "postgres"), autocommit=True) as conn:
+    with psycopg.connect(admin_dsn, autocommit=True) as conn:
         for user_id, email in ((alice, "alice@example.test"), (bob, "bob@example.test")):
-            conn.execute(
-                "insert into app_user (id, email) values (%s, %s)", (user_id, email)
-            )
+            conn.execute("insert into app_user (id, email) values (%s, %s)", (user_id, email))
             device_id = uuid.uuid4()
             conn.execute(
                 "insert into device (id, user_id, name, model) values (%s, %s, %s, %s)",

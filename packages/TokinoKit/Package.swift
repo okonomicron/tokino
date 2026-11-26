@@ -1,4 +1,4 @@
-// swift-tools-version: 6.2
+// swift-tools-version: 6.1
 import PackageDescription
 
 // TokinoKit is deliberately platform-agnostic: it imports only Foundation, so it
@@ -7,7 +7,12 @@ import PackageDescription
 // See docs/ARCHITECTURE.md ("The cloud-first lever").
 let package = Package(
     name: "TokinoKit",
-    platforms: [.iOS(.v26), .macOS(.v14)],
+    // Deliberately NOT the app's iOS 26 floor. TokinoKit imports only
+    // Foundation and uses no version-gated API, so tying it to the app's
+    // deployment target would force every consumer — and every CI toolchain —
+    // to be that new for no benefit. The app target sets its own iOS 26
+    // minimum in ios/project.yml.
+    platforms: [.iOS(.v18), .macOS(.v14)],
     products: [
         .library(name: "TokinoKit", targets: ["TokinoKit"])
     ],

@@ -222,7 +222,7 @@ def test_experience_time_order_is_enforced(as_user, seeded_users):
         )
 
 
-def test_publication_state_values_match_the_swift_enum(migrated_database):
+def test_publication_state_values_match_the_swift_enum(migrated_database, admin_dsn):
     """The CHECK constraint and PublicationState must not drift apart.
 
     If they do, a state the app can produce would be rejected by the database at
@@ -233,7 +233,7 @@ def test_publication_state_values_match_the_swift_enum(migrated_database):
         "published", "rejected", "needsRevision", "failed", "cancelled",
         "awaitingReconciliation",
     }
-    with psycopg.connect(migrated_database.replace("tokino_app_test", "postgres")) as conn:
+    with psycopg.connect(admin_dsn) as conn:
         # Several CHECK constraints mention `state`, so combine them all rather
         # than guessing which one enumerates the values.
         definitions = conn.execute(
@@ -361,14 +361,13 @@ def test_the_same_idempotency_key_cannot_be_reused_on_one_account(as_user, seede
 # Migration hygiene
 # --------------------------------------------------------------------------
 
-def test_migrations_are_idempotent(migrated_database):
+def test_migrations_are_idempotent(migrated_database, admin_dsn):
     """Re-applying every migration must be a no-op.
 
     This is what actually matters for a Supabase deploy, where a migration may
     be re-run against a database that already has part of the schema. There are
     deliberately no down-migrations: see docs/DECISIONS.md.
     """
-    admin_dsn = migrated_database.replace("tokino_app_test", "postgres")
     with psycopg.connect(admin_dsn, autocommit=True) as conn:
         before = conn.execute(
             "select count(*) from information_schema.tables where table_schema = 'public'"

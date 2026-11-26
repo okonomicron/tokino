@@ -39,9 +39,9 @@ DIRECT_USER_TABLES = [
 ]
 
 
-def test_every_public_table_has_rls_enabled_and_forced(migrated_database):
+def test_every_public_table_has_rls_enabled_and_forced(migrated_database, admin_dsn):
     """A table added later without RLS would be an open door, so assert on all."""
-    with psycopg.connect(migrated_database.replace("tokino_app_test", "postgres")) as conn:
+    with psycopg.connect(admin_dsn) as conn:
         rows = conn.execute(
             """
             select c.relname, c.relrowsecurity, c.relforcerowsecurity
@@ -61,9 +61,9 @@ def test_every_public_table_has_rls_enabled_and_forced(migrated_database):
     assert not unforced, f"tables without RLS forced: {unforced}"
 
 
-def test_every_public_table_has_at_least_one_policy(migrated_database):
+def test_every_public_table_has_at_least_one_policy(migrated_database, admin_dsn):
     """RLS enabled with no policy denies everything, which is safe but broken."""
-    with psycopg.connect(migrated_database.replace("tokino_app_test", "postgres")) as conn:
+    with psycopg.connect(admin_dsn) as conn:
         rows = conn.execute(
             """
             select c.relname, count(p.polname)
@@ -133,7 +133,7 @@ def test_a_user_cannot_reassign_their_row_to_another_user(as_user, seeded_users)
         alice_conn.execute("update device set user_id = %s", (bob,))
 
 
-def test_a_user_cannot_delete_another_users_rows(as_user, seeded_users):
+def test_a_user_cannot_delete_another_users_rows(as_user, seeded_users, admin_dsn):
     alice, bob = seeded_users["alice"], seeded_users["bob"]
     bob_device = seeded_users["devices"][bob]
 
@@ -143,7 +143,7 @@ def test_a_user_cannot_delete_another_users_rows(as_user, seeded_users):
     alice_conn.execute("delete from device where id = %s", (bob_device,))
 
     with psycopg.connect(
-        alice_conn.info.dsn.replace("tokino_app_test", "postgres"), autocommit=True
+        admin_dsn, autocommit=True
     ) as admin:
         remaining = admin.execute(
             "select count(*) from device where id = %s", (bob_device,)
