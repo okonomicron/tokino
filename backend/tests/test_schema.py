@@ -7,7 +7,6 @@ the policies permit the access they are supposed to.
 
 from __future__ import annotations
 
-import pathlib
 import uuid
 
 import psycopg

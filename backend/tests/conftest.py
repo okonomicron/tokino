@@ -34,7 +34,10 @@ def _cluster_available() -> bool:
     try:
         with psycopg.connect(SUPERUSER_DSN, connect_timeout=3):
             return True
-    except Exception:
+    except (psycopg.Error, OSError):
+        # psycopg raises OperationalError when nothing is listening; OSError
+        # covers a missing socket directory. Anything else is a real bug and
+        # should surface rather than silently skipping the whole suite.
         return False
 
 
