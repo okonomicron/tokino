@@ -1,6 +1,11 @@
 import XCTest
 import TokinoKit
 
+// The app module, so tests can reach types defined in the app target rather
+// than only in TokinoKit. @testable because these are unit tests of the app's
+// own types, not of its public surface — the app has no public surface.
+@testable import Tokino
+
 /// Confirms the iOS app target genuinely links TokinoKit and that the shared
 /// logic behaves the same when compiled by Xcode for iOS as it does under the
 /// Linux toolchain.
