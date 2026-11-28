@@ -1,0 +1,29 @@
+# Repo-wide lint configuration.
+#
+# Explicit rather than relying on ruff's defaults, so a new ruff release cannot
+# fail CI by enabling a rule the repo never opted into. CI pins the ruff
+# version too, so a local run and a CI run agree.
+#
+# Applies to backend/ and tools/ alike; backend/pyproject.toml used to carry
+# this and only covered the backend, which let tools/ drift.
+
+line-length = 100
+target-version = "py312"
+
+# Vendored upstream source, kept byte-for-byte so it can be diffed against
+# open_clip. Used only to generate test reference data; never shipped.
+extend-exclude = ["tools/assets/"]
+
+[lint]
+select = ["E", "F", "I", "UP", "B", "RUF", "SIM"]
+
+# E402 (imports not at the top of a file) comes with "E" and is left on. The
+# reference generators in tools/ must install a torch stub and write a
+# vocabulary file before importing open_clip, which instantiates a tokenizer at
+# import time, so those few imports carry an explicit per-line exemption.
+
+[lint.isort]
+# Without this, ruff sorts `app` and the tools' local modules as third-party,
+# because the root config is no longer inside a package directory. Declaring
+# them keeps import order stable wherever ruff is invoked from.
+known-first-party = ["app", "tests", "tokenizer_cases", "openclip_tokenizer"]

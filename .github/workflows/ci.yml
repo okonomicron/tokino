@@ -108,7 +108,9 @@ jobs:
           # never opted into. backend/pyproject.toml selects the rules
           # explicitly for the same reason.
           version: "0.17.6"
-          args: check backend
+          # The whole repository: tools/ went unlinted when this was scoped to
+          # backend/, and drifted. Rules are in ruff.toml at the root.
+          args: check .
 
       - name: Validate the XcodeGen manifest
         # Catches a malformed manifest here instead of burning a macOS job.

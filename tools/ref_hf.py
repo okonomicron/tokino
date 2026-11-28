@@ -11,8 +11,9 @@ import sys
 OUT = sys.argv[1]
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from tokenizer_cases import CASES  # noqa: E402
 from transformers import CLIPTokenizerFast  # noqa: E402
+
+from tokenizer_cases import CASES  # noqa: E402
 
 tok = CLIPTokenizerFast.from_pretrained("laion/CLIP-ViT-B-32-laion2B-s34B-b79K")
 payload = {

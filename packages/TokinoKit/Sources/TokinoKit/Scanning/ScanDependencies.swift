@@ -52,17 +52,23 @@ public enum ThumbnailOutcome: Sendable, Hashable {
 
 /// Turns image bytes into an embedding.
 public protocol ImageEmbedding: Sendable {
+    // These three are `nonisolated` so an actor can conform. A real
+    // implementation wraps a Core ML model and wants to be an actor — model
+    // handles are not thread-safe — but these values are derived from
+    // immutable configuration and need no isolation to read. Without this, the
+    // conformance fails with "crosses into actor-isolated code".
+
     /// Identifies the model, so a later upgrade can re-index only stale rows.
     /// Written into `IndexedAssetRecord.modelIdentifier`.
-    var modelIdentifier: String { get }
+    nonisolated var modelIdentifier: String { get }
 
     /// Expected output length. Checked against every result, because a
     /// mismatched vector reaching the store becomes an opaque database error
     /// far from its cause.
-    var dimensions: Int { get }
+    nonisolated var dimensions: Int { get }
 
     /// The longest edge, in pixels, this model wants its input at.
-    var preferredInputPixelSize: Int { get }
+    nonisolated var preferredInputPixelSize: Int { get }
 
     func embed(imageData: Data) async throws -> [Float]
 }

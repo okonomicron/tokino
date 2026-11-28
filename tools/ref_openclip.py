@@ -25,14 +25,15 @@ sys.modules["torch"] = stub
 # instantiates one at import time, so the file must exist before the import.
 bpe_gz = os.path.join(ASSETS, "bpe_simple_vocab_16e6.txt.gz")
 if not os.path.exists(bpe_gz):
-    with open(os.path.join(ASSETS, "merges.txt"), "rb") as src:
-        with gzip.open(bpe_gz, "wb") as dst:
-            dst.write(src.read())
+    with open(os.path.join(ASSETS, "merges.txt"), "rb") as src, gzip.open(bpe_gz, "wb") as dst:
+        dst.write(src.read())
 
 sys.path.insert(0, ASSETS)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import openclip_tokenizer as oct  # noqa: E402
 
+# Imported here, after the stub and the vocabulary file above, because
+# open_clip builds a tokenizer at import time from a file that must exist.
+import openclip_tokenizer as oct  # noqa: E402
 from tokenizer_cases import CASES  # noqa: E402
 
 tok = oct.SimpleTokenizer(bpe_path=bpe_gz)

@@ -25,12 +25,6 @@ asyncio_default_fixture_loop_scope = "function"
 # so `pytest` works on a laptop with nothing running.
 markers = ["db: requires a Postgres test cluster"]
 
-[tool.ruff]
-line-length = 100
-target-version = "py312"
-
-[tool.ruff.lint]
-# Selected explicitly rather than left to ruff's defaults, so a new ruff
-# release cannot fail CI by enabling a rule we never opted into. CI pins the
-# ruff version too, so local and CI runs agree.
-select = ["E", "F", "I", "UP", "B", "RUF"]
+# Lint configuration lives in the repository root (ruff.toml) so backend/ and
+# tools/ are held to the same rules. A [tool.ruff] block here would silently
+# override it for these files.

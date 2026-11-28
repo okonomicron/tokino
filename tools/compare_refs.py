@@ -8,8 +8,10 @@ the Swift implementation is matching open_clip by choice, not by accident.
 import json
 import sys
 
-oc = json.load(open(sys.argv[1]))
-hf = json.load(open(sys.argv[2]))
+with open(sys.argv[1]) as handle:
+    oc = json.load(handle)
+with open(sys.argv[2]) as handle:
+    hf = json.load(handle)
 out_path = sys.argv[3]
 
 hf_by_text = {c["text"]: c["ids"] for c in hf["cases"]}

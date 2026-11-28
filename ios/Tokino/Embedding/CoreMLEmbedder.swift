@@ -40,9 +40,11 @@ public actor CoreMLEmbedder: ImageEmbedding {
     private var imageModel: MLModel?
     private var textModel: MLModel?
 
-    public var modelIdentifier: String { descriptor.identifier }
-    public var dimensions: Int { descriptor.dimensions }
-    public var preferredInputPixelSize: Int { descriptor.inputPixelSize }
+    // nonisolated: these read `descriptor`, which is a `let`, so no isolation
+    // is needed and the protocol can stay synchronous for callers.
+    public nonisolated var modelIdentifier: String { descriptor.identifier }
+    public nonisolated var dimensions: Int { descriptor.dimensions }
+    public nonisolated var preferredInputPixelSize: Int { descriptor.inputPixelSize }
 
     public init(
         descriptor: EmbeddingModelDescriptor,

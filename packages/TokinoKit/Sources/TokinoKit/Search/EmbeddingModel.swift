@@ -95,9 +95,12 @@ extension EmbeddingModelDescriptor {
     /// Its 512 dimensions also happen to match the schema built in Milestone 1,
     /// so adopting it needs no migration.
     ///
-    /// The checksums and byte counts are filled in by
-    /// `tools/convert-openclip.py` and asserted by the macOS parity test. They
-    /// are placeholders until the first conversion is published.
+    /// The checksums and byte counts come from an actual run of
+    /// `tools/convert-openclip.py`, recorded in `build/models/manifest.json`.
+    /// Together the two towers are about 137 MB, which is what the first-run
+    /// download costs. Verified before use, because a model file is executable
+    /// content as far as the Neural Engine is concerned and we fetch it over
+    /// the network.
     public static let openCLIPViTB32 = EmbeddingModelDescriptor(
         identifier: "openclip-vit-b32-laion2b-v1",
         dimensions: 512,
@@ -109,13 +112,13 @@ extension EmbeddingModelDescriptor {
         pixelStandardDeviation: [0.26862954, 0.26130258, 0.27577711],
         imageEncoder: Artifact(
             fileName: "openclip-vit-b32-image.mlpackage.zip",
-            sha256: "",
-            byteCount: 0
+            sha256: "5124c890fedd182d3ddc50bb1fb1ecb4867be8a6c0f65b274a7ad2417c1b8eb6",
+            byteCount: 83006172
         ),
         textEncoder: Artifact(
             fileName: "openclip-vit-b32-text.mlpackage.zip",
-            sha256: "",
-            byteCount: 0
+            sha256: "5e3c34ee75e7fe920ff11b2750717361b2befcef0bf13cea8186275801c26d4c",
+            byteCount: 60943205
         ),
         weightsLicense: "MIT",
         weightsSource: "https://huggingface.co/laion/CLIP-ViT-B-32-laion2B-s34B-b79K"

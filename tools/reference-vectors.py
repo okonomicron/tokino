@@ -20,7 +20,8 @@ the end-to-end search test on a simulator with real photos. This script answers
 only "does the converted model compute the same function as the original".
 
 Usage:
-  python tools/reference-vectors.py --output packages/TokinoKit/Tests/TokinoKitTests/Fixtures/model-reference-vectors.json
+  python tools/reference-vectors.py \
+      --output packages/TokinoKit/Tests/TokinoKitTests/Fixtures/model-reference-vectors.json
 """
 
 from __future__ import annotations
