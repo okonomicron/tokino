@@ -48,6 +48,10 @@ public final class CoreMLEmbedder: ImageEmbedding, @unchecked Sendable {
     private let imageModelURL: URL
     private let textModelURL: URL
 
+    /// Guards the two lazily-loaded handles, which are the only mutable state.
+    /// Never held across a prediction, so concurrent embedding still runs in
+    /// parallel.
+    private let lock = NSLock()
     private var imageModel: MLModel?
     private var textModel: MLModel?
 

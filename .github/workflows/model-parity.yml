@@ -91,9 +91,16 @@ jobs:
               if str(manifest[field]) not in swift:
                   problems.append(f"{field}={manifest[field]} is not in the Swift descriptor")
 
-          # Checksums are expected to match only when the conversion is
-          # reproducible; report rather than fail, since k-means is seeded by
-          # scikit-learn and may differ across platforms.
+          # Checksums are reported, not enforced. k-means palettization is
+          # not bit-reproducible across platforms — a Linux x86 run and a
+          # macOS arm64 run of the same script produce different cluster
+          # centroids — so a mismatch here is expected and not a fault.
+          #
+          # The consequence matters though: the SHA-256 in the Swift descriptor
+          # must come from the *exact* artifact that gets published, not from
+          # any re-run. The release flow is therefore: run this workflow,
+          # download its artifact, publish that file, then copy its checksum
+          # into EmbeddingModelDescriptor. See docs/DECISIONS.md.
           for tower in ("imageEncoder", "textEncoder"):
               digest = manifest[tower]["sha256"]
               status = "matches" if digest in swift else "DIFFERS from"

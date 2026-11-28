@@ -213,3 +213,71 @@ The cloud dev container has no Docker daemon, so Docker-based tests cannot run
 where most development happens. A native cluster starts faster, and CI uses the
 `pgvector/pgvector` service container for the same tests. Both run real
 Postgres 16 with real pgvector, so neither path is a simulation.
+
+---
+
+## D14. OpenCLIP ViT-B/32 instead of MobileCLIP, on licence grounds
+
+**2026-11-28.** Decided: on-device embeddings come from OpenCLIP ViT-B/32
+trained on LAION-2B, converted to Core ML by `tools/convert-openclip.py`.
+
+**MobileCLIP was the obvious choice and cannot be used.** Apple's
+`LICENSE_MODELS` governs the weights:
+
+> "'Research Purposes' does not include any commercial exploitation, product
+> development or use in any commercial product or service."
+
+That excludes *product development*, not merely shipping, so it is unusable
+even for an MVP. The Hugging Face model card's `apple-ascl` tag contradicts the
+repository's licence file; the repository text is operative. This was logged as
+risk D4 in Milestone 1 and has now materialised.
+
+**SigLIP 2 was the accuracy-first alternative and was rejected on size.** It is
+Apache-2.0 and well converted — published reports show Core ML matching PyTorch
+at 0.9999 mean cosine, ImageNet top-1 0.76764 against 0.76794, and 5.6 ms per
+image on the Neural Engine. But its text tower is 539 MB, because its
+vocabulary is 256k tokens against OpenCLIP's 49,408. Keeping search working
+offline mattered more than the roughly 11-point zero-shot gap.
+
+**What the choice bought us**, beyond the licence:
+
+- 512-dimension output, which matches `PhotoEmbedding.dimensions` and the
+  `vector(512)` column from Milestone 1 exactly. **No migration.** SigLIP 2
+  would have forced 512 to 768.
+- 137 MB for both towers at 8-bit (image 79.2 MB, text 58.1 MB), better than
+  the 150 MB the plan estimated.
+- Verified parity: all 8 checks at cosine ≥ 0.9992 against the PyTorch
+  reference, so 8-bit palettization costs almost nothing.
+
+The model sits behind `ImageEmbedding` with a versioned identifier, so moving
+to SigLIP 2 later is a re-index rather than a rewrite.
+
+**Outstanding:** the MobileCLIP ASCL risk recorded in D4 is now closed — we do
+not use those weights. The LAION dataset's provenance is a separate question;
+the weights are MIT, and Re-LAION exists if a cleaner lineage is ever wanted.
+
+---
+
+## D15. Palettized model checksums are not reproducible
+
+**2026-11-28.** Noted during the first macOS parity run: the same conversion
+script produces **different** SHA-256 checksums on Linux x86 and macOS arm64.
+
+k-means palettization is not bit-reproducible across platforms — the cluster
+centroids differ. The zip archiving is deterministic (fixed timestamps, sorted
+entries), so the difference is genuinely in the weights.
+
+The consequence is procedural rather than technical. The checksum in
+`EmbeddingModelDescriptor` must come from the **exact artifact that is
+published**, not from any re-run of the conversion. So the release flow is:
+
+1. Run the `model-parity` workflow and confirm it passes.
+2. Download its `openclip-coreml` artifact.
+3. Publish those exact files as a release asset.
+4. Copy that artifact's checksums into the descriptor.
+
+The parity workflow therefore *reports* a checksum mismatch rather than failing
+on one, and the app verifies the download against whatever the descriptor says.
+
+An alternative would be to disable palettization for reproducibility, at the
+cost of roughly doubling the download to about 300 MB. Not worth it.
