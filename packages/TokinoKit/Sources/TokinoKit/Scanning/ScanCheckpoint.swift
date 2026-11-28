@@ -26,6 +26,13 @@ public struct ScanCheckpoint: Sendable, Hashable, Codable {
     public var completedIdentifiers: Set<String>
     /// Identifiers that failed and should not be retried indefinitely.
     public var failedIdentifiers: Set<String>
+    /// Identifiers whose data lives only in iCloud.
+    ///
+    /// Counted as settled, so a library full of undownloaded photos still
+    /// reaches completion rather than looking stuck forever. Kept separate from
+    /// failures so the UI can say "waiting in iCloud" instead of "failed", and
+    /// so a later scan retries them once they have downloaded.
+    public var deferredIdentifiers: Set<String>
     public let startedAt: Date
     public var updatedAt: Date
     /// PhotoKit's persistent change token at the moment the plan was built,
@@ -39,6 +46,7 @@ public struct ScanCheckpoint: Sendable, Hashable, Codable {
         totalWorkItems: Int,
         completedIdentifiers: Set<String> = [],
         failedIdentifiers: Set<String> = [],
+        deferredIdentifiers: Set<String> = [],
         startedAt: Date,
         updatedAt: Date,
         changeTokenData: Data? = nil
@@ -48,13 +56,16 @@ public struct ScanCheckpoint: Sendable, Hashable, Codable {
         self.totalWorkItems = totalWorkItems
         self.completedIdentifiers = completedIdentifiers
         self.failedIdentifiers = failedIdentifiers
+        self.deferredIdentifiers = deferredIdentifiers
         self.startedAt = startedAt
         self.updatedAt = updatedAt
         self.changeTokenData = changeTokenData
     }
 
-    /// Items settled one way or the other.
-    public var settledCount: Int { completedIdentifiers.count + failedIdentifiers.count }
+    /// Items settled one way or another: embedded, failed, or waiting in iCloud.
+    public var settledCount: Int {
+        completedIdentifiers.count + failedIdentifiers.count + deferredIdentifiers.count
+    }
 
     public var remainingCount: Int { max(0, totalWorkItems - settledCount) }
 
@@ -76,12 +87,18 @@ public struct ScanCheckpoint: Sendable, Hashable, Codable {
     public mutating func recordBatch(
         succeeded: [String],
         failed: [String] = [],
+        deferred: [String] = [],
         at date: Date
     ) {
         completedIdentifiers.formUnion(succeeded)
-        // An identifier that later succeeds should not stay marked failed.
+        // An identifier that later succeeds should not stay in either of the
+        // other two sets, or it would be counted twice.
         failedIdentifiers.subtract(succeeded)
+        deferredIdentifiers.subtract(succeeded)
         failedIdentifiers.formUnion(failed.filter { !completedIdentifiers.contains($0) })
+        deferredIdentifiers.formUnion(
+            deferred.filter { !completedIdentifiers.contains($0) && !failedIdentifiers.contains($0) }
+        )
         updatedAt = date
         if phase == .indexing && remainingCount == 0 {
             phase = .pruning
@@ -96,6 +113,7 @@ public struct ScanCheckpoint: Sendable, Hashable, Codable {
         plan.orderedWorkItems.filter {
             !completedIdentifiers.contains($0.localIdentifier)
                 && !failedIdentifiers.contains($0.localIdentifier)
+                && !deferredIdentifiers.contains($0.localIdentifier)
         }
     }
 }
@@ -105,6 +123,9 @@ public struct ScanProgress: Sendable, Hashable {
     public let phase: ScanCheckpoint.Phase
     public let completed: Int
     public let failed: Int
+    /// Photos waiting in iCloud. Surfaced so the UI can offer to fetch them
+    /// rather than reporting them as problems.
+    public let deferredToCloud: Int
     public let total: Int
     public let fractionComplete: Double
     /// Nil until enough work has completed to estimate meaningfully. Showing a
@@ -115,6 +136,7 @@ public struct ScanProgress: Sendable, Hashable {
         self.phase = checkpoint.phase
         self.completed = checkpoint.completedIdentifiers.count
         self.failed = checkpoint.failedIdentifiers.count
+        self.deferredToCloud = checkpoint.deferredIdentifiers.count
         self.total = checkpoint.totalWorkItems
         self.fractionComplete = checkpoint.fractionComplete
 

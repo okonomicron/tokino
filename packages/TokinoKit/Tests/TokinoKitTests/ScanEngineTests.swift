@@ -7,19 +7,22 @@ import Testing
 /// A photo library that serves whatever snapshots a test gives it.
 actor FakeLibrary: PhotoLibraryReading {
     private var snapshots: [LibraryAssetSnapshot]
-    private var unavailable: Set<String>
+    private var inCloud: Set<String>
+    private var unreadable: Set<String>
     private var throwingFor: Set<String>
     private var changeToken: Data?
     private(set) var thumbnailRequests: [String] = []
 
     init(
         snapshots: [LibraryAssetSnapshot],
-        unavailable: Set<String> = [],
+        inCloud: Set<String> = [],
+        unreadable: Set<String> = [],
         throwingFor: Set<String> = [],
         changeToken: Data? = Data([0xAB])
     ) {
         self.snapshots = snapshots
-        self.unavailable = unavailable
+        self.inCloud = inCloud
+        self.unreadable = unreadable
         self.throwingFor = throwingFor
         self.changeToken = changeToken
     }
@@ -28,11 +31,12 @@ actor FakeLibrary: PhotoLibraryReading {
 
     func enumerateAssets() async throws -> [LibraryAssetSnapshot] { snapshots }
 
-    func thumbnailData(for localIdentifier: String, maxPixelSize: Int) async throws -> Data? {
+    func thumbnail(for localIdentifier: String, maxPixelSize: Int) async throws -> ThumbnailOutcome {
         thumbnailRequests.append(localIdentifier)
         if throwingFor.contains(localIdentifier) { throw Unreadable() }
-        if unavailable.contains(localIdentifier) { return nil }
-        return Data(localIdentifier.utf8)
+        if inCloud.contains(localIdentifier) { return .deferredToCloud }
+        if unreadable.contains(localIdentifier) { return .unavailable(reason: "corrupt") }
+        return .available(Data(localIdentifier.utf8))
     }
 
     func currentChangeToken() async -> Data? { changeToken }
@@ -321,17 +325,70 @@ struct ScanEngineTests {
         #expect(await store.stored["asset-4"] == nil)
     }
 
-    /// An iCloud-only asset whose thumbnail is unavailable is skipped, not
-    /// waited on — the brief forbids forcing downloads.
-    @Test("an asset with no local data is skipped rather than waited on")
-    func unavailableAssetSkipped() async throws {
-        let library = FakeLibrary(snapshots: Self.snapshots(5), unavailable: ["asset-2"])
+    /// PhotoKit cannot tell us in advance whether an asset's data is local, so
+    /// "this is in iCloud" is discovered here. It must be reported separately
+    /// from a failure: telling someone their photos are broken when they are
+    /// merely not downloaded is a bad bug.
+    @Test("an iCloud-only asset is deferred, not failed")
+    func iCloudAssetIsDeferredNotFailed() async throws {
+        let library = FakeLibrary(snapshots: Self.snapshots(5), inCloud: ["asset-2"])
         let engine = Self.engine(library: library)
 
         let outcome = try await engine.scan(policy: Self.policy())
 
         #expect(outcome.newlyIndexed == 4)
+        #expect(outcome.deferredToCloud == 1)
+        #expect(outcome.failed == 0, "an undownloaded photo is not a failure")
+        #expect(outcome.checkpoint.deferredIdentifiers == ["asset-2"])
+        #expect(outcome.checkpoint.failedIdentifiers.isEmpty)
+    }
+
+    /// Deferred photos still count as settled, or a library of undownloaded
+    /// photos would never reach completion and would look permanently stuck.
+    @Test("a library entirely in iCloud still completes")
+    func fullyCloudLibraryCompletes() async throws {
+        let identifiers = Set(Self.snapshots(6).map(\.localIdentifier))
+        let library = FakeLibrary(snapshots: Self.snapshots(6), inCloud: identifiers)
+        let observer = RecordingObserver()
+        let engine = Self.engine(library: library, observer: observer)
+
+        let outcome = try await engine.scan(policy: Self.policy(batchSize: 3))
+
+        #expect(outcome.stopReason == .completed)
+        #expect(outcome.deferredToCloud == 6)
+        #expect(await observer.fractions.last == 1)
+    }
+
+    /// Once the photo downloads, a later scan must index it.
+    @Test("a deferred asset is indexed by a later scan once downloaded")
+    func deferredAssetIndexedAfterDownload() async throws {
+        let store = FakeEmbeddingStore()
+        let checkpoints = FakeCheckpointStore()
+
+        let cloudy = FakeLibrary(snapshots: Self.snapshots(4), inCloud: ["asset-1"])
+        let first = try await Self.engine(
+            library: cloudy, store: store, checkpoints: checkpoints
+        ).scan(policy: Self.policy())
+        #expect(first.deferredToCloud == 1)
+        #expect(await store.stored["asset-1"] == nil)
+
+        let downloaded = FakeLibrary(snapshots: Self.snapshots(4))
+        let second = try await Self.engine(
+            library: downloaded, store: store, checkpoints: checkpoints
+        ).scan(policy: Self.policy())
+
+        #expect(second.newlyIndexed == 1)
+        #expect(await store.stored["asset-1"] != nil)
+    }
+
+    @Test("a genuinely unreadable asset is a failure, not a deferral")
+    func unreadableAssetIsFailure() async throws {
+        let library = FakeLibrary(snapshots: Self.snapshots(5), unreadable: ["asset-3"])
+        let outcome = try await Self.engine(library: library).scan(policy: Self.policy())
+
         #expect(outcome.failed == 1)
+        #expect(outcome.deferredToCloud == 0)
+        #expect(outcome.checkpoint.failedIdentifiers == ["asset-3"])
     }
 
     /// A wrong-sized vector means the model and our expectations disagree.
@@ -354,16 +411,21 @@ struct ScanEngineTests {
         #expect(await store.stored.values.allSatisfy { $0.vector.count == 8 })
     }
 
-    @Test("cloud-only assets are reported as skipped, not failed")
-    func cloudOnlyReportedSeparately() async throws {
+    /// A platform that *can* report cloud status at enumeration time has those
+    /// assets filtered out by ScanPlanner before the engine sees them. iOS
+    /// cannot, which is why the deferral path above exists as well.
+    @Test("assets flagged cloud-only at enumeration are never fetched")
+    func enumerationFlaggedCloudOnlyNeverFetched() async throws {
         let library = FakeLibrary(snapshots: Self.snapshots(10, cloudOnly: [3, 7]))
         let engine = Self.engine(library: library)
 
         let outcome = try await engine.scan(policy: Self.policy())
 
-        #expect(outcome.skippedCloudOnly == 2)
         #expect(outcome.newlyIndexed == 8)
         #expect(outcome.failed == 0)
+        let requested = await library.thumbnailRequests
+        #expect(!requested.contains("asset-3"))
+        #expect(!requested.contains("asset-7"))
     }
 
     // MARK: - Gating
@@ -579,8 +641,8 @@ struct ScanEngineTests {
         let store = FakeEmbeddingStore()
         let checkpoints = FakeCheckpointStore()
 
-        // First pass: asset-2 is not available locally.
-        let flaky = FakeLibrary(snapshots: Self.snapshots(5), unavailable: ["asset-2"])
+        // First pass: asset-2 is unreadable.
+        let flaky = FakeLibrary(snapshots: Self.snapshots(5), unreadable: ["asset-2"])
         let first = try await Self.engine(
             library: flaky, store: store, checkpoints: checkpoints
         ).scan(policy: Self.policy())

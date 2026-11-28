@@ -81,6 +81,71 @@ struct ScanCheckpointTests {
         #expect(cp.phase == .pruning)
     }
 
+    // MARK: - Deferred (iCloud) assets
+
+    /// Deferred photos count as settled, or a library of undownloaded photos
+    /// would never reach completion and would look permanently stuck.
+    @Test("deferred assets advance progress without being counted as failures")
+    func deferredAdvancesProgress() {
+        var cp = Self.checkpoint(total: 4)
+        cp.recordBatch(succeeded: ["a1"], failed: ["a2"], deferred: ["a3"], at: Self.t0)
+
+        #expect(cp.completedIdentifiers == ["a1"])
+        #expect(cp.failedIdentifiers == ["a2"])
+        #expect(cp.deferredIdentifiers == ["a3"])
+        #expect(cp.settledCount == 3)
+        #expect(cp.fractionComplete == 0.75)
+    }
+
+    @Test("an asset that later downloads stops being deferred")
+    func downloadClearsDeferral() {
+        var cp = Self.checkpoint(total: 2)
+        cp.recordBatch(succeeded: [], deferred: ["a1"], at: Self.t0)
+        #expect(cp.deferredIdentifiers == ["a1"])
+
+        cp.recordBatch(succeeded: ["a1"], at: Self.t0)
+        #expect(cp.deferredIdentifiers.isEmpty)
+        #expect(cp.completedIdentifiers == ["a1"])
+        #expect(cp.settledCount == 1, "the asset must not be counted twice")
+    }
+
+    /// The three sets must stay disjoint, or progress would exceed the total.
+    @Test("an identifier cannot be in two settled categories at once")
+    func settledCategoriesAreDisjoint() {
+        var cp = Self.checkpoint(total: 1)
+        cp.recordBatch(succeeded: ["a1"], failed: ["a1"], deferred: ["a1"], at: Self.t0)
+
+        #expect(cp.completedIdentifiers == ["a1"])
+        #expect(cp.failedIdentifiers.isEmpty)
+        #expect(cp.deferredIdentifiers.isEmpty)
+        #expect(cp.settledCount == 1)
+        #expect(cp.fractionComplete == 1)
+    }
+
+    @Test("deferred assets are not re-queued within the same pass")
+    func deferredNotRequeuedInSamePass() {
+        let plan = ScanPlanner.plan(
+            library: (1...4).map { LibraryAssetSnapshot(localIdentifier: "a\($0)") },
+            indexed: [],
+            policy: ScanPolicy(currentModelIdentifier: "m1")
+        )
+        var cp = Self.checkpoint(total: plan.totalWorkItems)
+        cp.recordBatch(succeeded: ["a1"], deferred: ["a2"], at: Self.t0)
+
+        #expect(cp.pendingItems(from: plan).map(\.localIdentifier) == ["a3", "a4"])
+    }
+
+    @Test("progress reports the deferred count separately")
+    func progressSurfacesDeferredCount() {
+        var cp = Self.checkpoint(total: 10)
+        cp.recordBatch(succeeded: ["a1"], deferred: ["a2", "a3"], at: Self.t0)
+        let progress = ScanProgress(checkpoint: cp, now: Self.t0)
+
+        #expect(progress.completed == 1)
+        #expect(progress.deferredToCloud == 2)
+        #expect(progress.failed == 0)
+    }
+
     // MARK: - Resume
 
     /// The core resume property: after an interruption, only unfinished items

@@ -1,0 +1,165 @@
+#!/usr/bin/env python3
+"""Generate PyTorch reference embeddings, so the Core ML conversion can be checked.
+
+`coremltools` converts on Linux but cannot *run* a model there: `predict()`
+needs macOS. So conversion correctness is established in two halves — this
+script records what the authoritative PyTorch model produces, and a test on the
+macOS runner asserts the converted Core ML model reproduces it.
+
+Inputs are **synthetic and deterministic** rather than photographs, on purpose:
+
+- No image files to commit, and no licensing question about them.
+- No JPEG decoding in the comparison. Two platforms' decoders can differ by a
+  bit or two per channel, which would show up as a parity failure that has
+  nothing to do with the conversion.
+- The pixel pattern is defined by a formula that Swift reproduces exactly, so
+  both sides genuinely feed the model identical numbers.
+
+Proving the model is *semantically* useful is a different question, answered by
+the end-to-end search test on a simulator with real photos. This script answers
+only "does the converted model compute the same function as the original".
+
+Usage:
+  python tools/reference-vectors.py --output packages/TokinoKit/Tests/TokinoKitTests/Fixtures/model-reference-vectors.json
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import pathlib
+import sys
+
+import torch
+
+MODEL_NAME = "ViT-B-32"
+PRETRAINED = "laion2b_s34b_b79k"
+CONTEXT_LENGTH = 77
+
+# Texts whose embeddings the macOS test will reproduce. Chosen to span the
+# tokenizer's behaviour as well as the tower's: a plain phrase, a single word,
+# non-ASCII, and the acceptance-test subject.
+REFERENCE_TEXTS = [
+    "a photo of a dog",
+    "kaisendon",
+    "seafood rice bowl",
+    "海鮮丼",
+    "",
+]
+
+# Synthetic image patterns, each a (name, seed) pair. The formula is in
+# `syntheticPixels` below and is mirrored in Swift.
+REFERENCE_IMAGE_SEEDS = [0, 1, 7]
+
+
+def synthetic_pixels(size: int, seed: int) -> torch.Tensor:
+    """A deterministic pixel pattern in 0...1, shaped (1, 3, size, size).
+
+    Mirrored exactly by `ModelParityFixture.syntheticPixels` in Swift. Keep the
+    two in step: any change here invalidates the committed reference vectors.
+    """
+    values = torch.zeros(1, 3, size, size, dtype=torch.float32)
+    for channel in range(3):
+        for y in range(size):
+            for x in range(size):
+                raw = (x * 7 + y * 13 + channel * 29 + seed * 101) % 256
+                values[0, channel, y, x] = raw / 255.0
+    return values
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--output", required=True, type=pathlib.Path)
+    args = parser.parse_args()
+
+    import open_clip
+
+    print(f"[reference] loading {MODEL_NAME} / {PRETRAINED}", flush=True)
+    model, _, preprocess = open_clip.create_model_and_transforms(
+        MODEL_NAME, pretrained=PRETRAINED
+    )
+    model.eval()
+    tokenizer = open_clip.get_tokenizer(MODEL_NAME)
+
+    mean = std = None
+    for transform in getattr(preprocess, "transforms", []):
+        if hasattr(transform, "mean") and hasattr(transform, "std"):
+            mean = [float(v) for v in transform.mean]
+            std = [float(v) for v in transform.std]
+    if mean is None or std is None:
+        raise RuntimeError("could not read normalisation constants")
+
+    image_size = model.visual.image_size
+    if isinstance(image_size, (tuple, list)):
+        image_size = int(image_size[0])
+
+    mean_tensor = torch.tensor(mean).view(1, 3, 1, 1)
+    std_tensor = torch.tensor(std).view(1, 3, 1, 1)
+
+    image_cases = []
+    with torch.no_grad():
+        for seed in REFERENCE_IMAGE_SEEDS:
+            raw = synthetic_pixels(image_size, seed)
+            # Normalisation is applied here, outside the model, because the
+            # Core ML package also takes already-normalised pixels. Both sides
+            # must do the same arithmetic.
+            normalized = (raw - mean_tensor) / std_tensor
+            features = model.encode_image(normalized)
+            features = features / features.norm(dim=-1, keepdim=True)
+            image_cases.append(
+                {"seed": seed, "embedding": [float(v) for v in features[0].tolist()]}
+            )
+            print(f"[reference] image seed {seed}: {len(image_cases[-1]['embedding'])} dims")
+
+        text_cases = []
+        for text in REFERENCE_TEXTS:
+            tokens = tokenizer([text])
+            features = model.encode_text(tokens)
+            features = features / features.norm(dim=-1, keepdim=True)
+            text_cases.append(
+                {
+                    "text": text,
+                    "tokenIDs": [int(v) for v in tokens[0].tolist()],
+                    "embedding": [float(v) for v in features[0].tolist()],
+                }
+            )
+            print(f"[reference] text {text!r}: {len(text_cases[-1]['embedding'])} dims")
+
+    payload = {
+        "_comment": (
+            "Generated by tools/reference-vectors.py from the PyTorch model. "
+            "Do not hand-edit. The macOS parity test asserts the converted "
+            "Core ML model reproduces these to within a cosine tolerance. "
+            "Pixel patterns come from a formula mirrored in Swift; changing it "
+            "invalidates these vectors."
+        ),
+        "modelIdentifier": "openclip-vit-b32-laion2b-v1",
+        "openClipModel": MODEL_NAME,
+        "openClipPretrained": PRETRAINED,
+        "torchVersion": torch.__version__,
+        "dimensions": len(image_cases[0]["embedding"]),
+        "inputPixelSize": image_size,
+        "contextLength": CONTEXT_LENGTH,
+        "pixelMean": mean,
+        "pixelStandardDeviation": std,
+        "images": image_cases,
+        "texts": text_cases,
+    }
+
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(json.dumps(payload, indent=1, ensure_ascii=False) + "\n")
+    print(f"[reference] wrote {args.output}", flush=True)
+
+    # Normalised embeddings must be unit length; a failure here means the
+    # normalisation above is wrong and every later comparison would be junk.
+    for case in image_cases + text_cases:
+        magnitude = sum(v * v for v in case["embedding"]) ** 0.5
+        if abs(magnitude - 1.0) > 1e-3:
+            print(f"[reference] ERROR: embedding is not unit length ({magnitude})")
+            return 1
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

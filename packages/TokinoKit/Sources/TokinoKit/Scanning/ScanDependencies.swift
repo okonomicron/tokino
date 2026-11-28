@@ -15,9 +15,10 @@ public protocol PhotoLibraryReading: Sendable {
 
     /// A downsized derivative suitable for embedding.
     ///
-    /// Returns nil when the asset is not available locally, rather than waiting
-    /// on a network fetch. The caller records it as skipped and moves on.
-    func thumbnailData(for localIdentifier: String, maxPixelSize: Int) async throws -> Data?
+    /// Never waits on a network fetch: the brief forbids pulling the library
+    /// down from iCloud. An asset that is not local comes back as
+    /// `.deferredToCloud` and is retried by a later scan.
+    func thumbnail(for localIdentifier: String, maxPixelSize: Int) async throws -> ThumbnailOutcome
 
     /// PhotoKit's persistent change token, opaque to us.
     ///
@@ -25,6 +26,28 @@ public protocol PhotoLibraryReading: Sendable {
     /// changed. Nil when the platform cannot supply one, in which case the scan
     /// falls back to a full enumeration and diff — correct, just less efficient.
     func currentChangeToken() async -> Data?
+}
+
+/// What asking for a thumbnail produced.
+///
+/// Three cases rather than an optional, because the difference matters to the
+/// user. PhotoKit has **no property** telling you in advance whether an asset's
+/// data is on the device: the only documented way to find out is to request an
+/// image with `isNetworkAccessAllowed = false` and inspect
+/// `PHImageResultIsInCloudKey` in the result. So "this photo lives in iCloud"
+/// is discovered here, during the scan, not during enumeration — which is why
+/// `LibraryAssetSnapshot.isCloudOnly` is always false on iOS.
+///
+/// Conflating the cloud case with failure would tell someone their photos are
+/// broken when they are merely not downloaded.
+public enum ThumbnailOutcome: Sendable, Hashable {
+    case available(Data)
+    /// The asset exists but its data is only in iCloud. Not an error, and worth
+    /// retrying once it has been downloaded.
+    case deferredToCloud
+    /// Genuinely unreadable: a corrupt file, an unsupported format, a revoked
+    /// permission.
+    case unavailable(reason: String)
 }
 
 /// Turns image bytes into an embedding.

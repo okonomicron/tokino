@@ -16,7 +16,9 @@ public struct ScanOutcome: Sendable, Hashable {
     public let newlyIndexed: Int
     public let failed: Int
     public let removed: Int
-    public let skippedCloudOnly: Int
+    /// Photos whose data is only in iCloud, discovered during the scan. Not
+    /// failures: a later scan picks them up once they have downloaded.
+    public let deferredToCloud: Int
     public let stopReason: StopReason
 
     /// True when the scan can be resumed by calling the engine again.
@@ -96,7 +98,7 @@ public actor ScanEngine {
                 checkpoint: existing ?? ScanCheckpoint(
                     totalWorkItems: 0, startedAt: clock(), updatedAt: clock()
                 ),
-                newlyIndexed: 0, failed: 0, removed: 0, skippedCloudOnly: 0,
+                newlyIndexed: 0, failed: 0, removed: 0, deferredToCloud: 0,
                 stopReason: .blocked(reason)
             )
         }
@@ -122,6 +124,7 @@ public actor ScanEngine {
 
         var newlyIndexed = 0
         var failedCount = 0
+        var deferredCount = 0
 
         for batch in pending.chunked(into: policy.batchSize) {
             // Re-read conditions between batches: a phone gets unplugged, Wi-Fi
@@ -131,7 +134,7 @@ public actor ScanEngine {
                 try await checkpoints.save(checkpoint)
                 return ScanOutcome(
                     checkpoint: checkpoint, newlyIndexed: newlyIndexed, failed: failedCount,
-                    removed: 0, skippedCloudOnly: plan.skippedCloudOnly.count,
+                    removed: 0, deferredToCloud: deferredCount,
                     stopReason: .blocked(reason)
                 )
             }
@@ -140,7 +143,7 @@ public actor ScanEngine {
                 try await checkpoints.save(checkpoint)
                 return ScanOutcome(
                     checkpoint: checkpoint, newlyIndexed: newlyIndexed, failed: failedCount,
-                    removed: 0, skippedCloudOnly: plan.skippedCloudOnly.count,
+                    removed: 0, deferredToCloud: deferredCount,
                     stopReason: .cancelled
                 )
             }
@@ -148,6 +151,7 @@ public actor ScanEngine {
             var embeddings: [StoredEmbedding] = []
             var succeeded: [String] = []
             var failed: [String] = []
+            var deferred: [String] = []
 
             for snapshot in batch {
                 // Checked per asset so cancelling a scan feels immediate rather
@@ -155,12 +159,21 @@ public actor ScanEngine {
                 if isCancelled || Task.isCancelled { break }
 
                 do {
-                    guard let imageData = try await library.thumbnailData(
+                    let outcome = try await library.thumbnail(
                         for: snapshot.localIdentifier,
                         maxPixelSize: embedder.preferredInputPixelSize
-                    ) else {
-                        // Not available locally. Not a failure of ours, and the
-                        // next scan will pick it up once it is downloaded.
+                    )
+
+                    let imageData: Data
+                    switch outcome {
+                    case .available(let data):
+                        imageData = data
+                    case .deferredToCloud:
+                        // Only in iCloud. Recorded separately from a failure so
+                        // the user is told their photos are waiting, not broken.
+                        deferred.append(snapshot.localIdentifier)
+                        continue
+                    case .unavailable:
                         failed.append(snapshot.localIdentifier)
                         continue
                     }
@@ -202,14 +215,17 @@ public actor ScanEngine {
 
             newlyIndexed += succeeded.count
             failedCount += failed.count
-            checkpoint.recordBatch(succeeded: succeeded, failed: failed, at: clock())
+            deferredCount += deferred.count
+            checkpoint.recordBatch(
+                succeeded: succeeded, failed: failed, deferred: deferred, at: clock()
+            )
             try await checkpoints.save(checkpoint)
             await report(checkpoint)
 
             if isCancelled || Task.isCancelled {
                 return ScanOutcome(
                     checkpoint: checkpoint, newlyIndexed: newlyIndexed, failed: failedCount,
-                    removed: 0, skippedCloudOnly: plan.skippedCloudOnly.count,
+                    removed: 0, deferredToCloud: deferredCount,
                     stopReason: .cancelled
                 )
             }
@@ -234,7 +250,7 @@ public actor ScanEngine {
             newlyIndexed: newlyIndexed,
             failed: failedCount,
             removed: plan.toRemove.count,
-            skippedCloudOnly: plan.skippedCloudOnly.count,
+            deferredToCloud: deferredCount,
             stopReason: .completed
         )
     }
@@ -269,6 +285,7 @@ public actor ScanEngine {
             totalWorkItems: plan.totalWorkItems,
             completedIdentifiers: stored.completedIdentifiers,
             failedIdentifiers: stored.failedIdentifiers,
+            deferredIdentifiers: stored.deferredIdentifiers,
             startedAt: stored.startedAt,
             updatedAt: clock(),
             changeTokenData: stored.changeTokenData

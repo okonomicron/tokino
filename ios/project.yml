@@ -54,12 +54,16 @@ targets:
           Photos stay on your device: only small numeric summaries and details
           like dates and locations are sent to Tokino's servers, and a picture
           itself is only uploaded when you approve a post that uses it.
-        # Must be declared or iOS rejects the identifier at submission time.
+        # A continued-processing task submits a *concrete* identifier per run,
+        # typically with a UUID, and the system matches it against a wildcard
+        # prefix declared here. Two concrete identifiers would be rejected at
+        # submission with BGTaskScheduler.Error.Code.notPermitted. The catch-up
+        # task is a plain BGProcessingTask and keeps a concrete identifier.
         BGTaskSchedulerPermittedIdentifiers:
-          - co.shinruey.tokino.scan.continued
+          - co.shinruey.tokino.scan.continued.*
           - co.shinruey.tokino.scan.catchup
-        UIBackgroundModes:
-          - processing
+        # Declared only once M2b actually schedules background work. Claiming a
+        # background mode the app does not use invites an App Review rejection.
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: co.shinruey.tokino
