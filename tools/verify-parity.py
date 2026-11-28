@@ -65,6 +65,21 @@ def synthetic_pixels(size: int, seed: int) -> np.ndarray:
     return values
 
 
+def tokenize_for_text_tower(text: str, reference: dict) -> np.ndarray:
+    """Token IDs for `text`, shaped for the text tower.
+
+    Uses `open_clip`'s tokenizer, which is the authority for these weights and
+    is what the committed Swift implementation is tested against. Importing it
+    here rather than at module scope keeps the skip-on-Linux path above free of
+    the dependency.
+    """
+    import open_clip
+
+    tokenizer = open_clip.get_tokenizer(reference["openClipModel"])
+    tokens = tokenizer([text])
+    return np.array(tokens, dtype=np.int32)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--models", required=True, type=pathlib.Path)
@@ -174,6 +189,52 @@ def main() -> int:
             failures.append(
                 "a synthetic pattern matched text suspiciously well; the towers may be mismatched"
             )
+
+    # --- semantic sanity, using the text tower against itself ---
+    #
+    # Parity proves the conversion is faithful to PyTorch. It does not prove the
+    # embeddings mean anything: a tower that had been converted with, say, a
+    # transposed projection would reproduce PyTorch exactly if PyTorch were fed
+    # the same wrong weights. These checks assert the space still has the
+    # structure search depends on — related phrases close together, unrelated
+    # ones apart.
+    #
+    # Text-only on purpose: it needs no image fixtures, so there is nothing to
+    # license and nothing to decode. Image-text alignment is checked separately
+    # by searching a seeded simulator library.
+    print()
+    print("[parity] semantic structure of the text tower")
+
+    def embed_text(text: str) -> np.ndarray:
+        tokens = tokenize_for_text_tower(text, reference)
+        output = text_model.predict({"input_ids": tokens})
+        return np.array(output["text_embedding"], dtype=np.float32).reshape(-1)
+
+    # Each triple is (anchor, expected-nearer, expected-further). These are
+    # deliberately coarse: a correct CLIP text tower gets all of them easily,
+    # and a broken one fails them badly, so the test is about structure rather
+    # than fine-grained quality.
+    triples = [
+        ("a photo of a dog", "a photo of a puppy", "a photo of a submarine"),
+        ("seafood rice bowl", "a bowl of raw fish and rice", "a mountain bicycle"),
+        ("a city street at night", "a dark urban road", "a bowl of soup"),
+    ]
+
+    for anchor, nearer, further in triples:
+        anchor_vector = embed_text(anchor)
+        near_score = cosine(anchor_vector, embed_text(nearer))
+        far_score = cosine(anchor_vector, embed_text(further))
+        margin = near_score - far_score
+        print(
+            f"[parity]   {anchor!r}: near={near_score:.4f} far={far_score:.4f} "
+            f"margin={margin:+.4f}"
+        )
+        if margin <= 0:
+            failures.append(
+                f"semantic structure lost: {anchor!r} is no closer to "
+                f"{nearer!r} ({near_score:.4f}) than to {further!r} ({far_score:.4f})"
+            )
+        checked += 1
 
     print()
     if failures:
