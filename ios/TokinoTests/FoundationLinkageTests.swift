@@ -62,6 +62,64 @@ final class FoundationLinkageTests: XCTestCase {
         XCTAssertEqual(plan.unchangedCount, 10)
     }
 
+    /// SwiftPM resource bundles resolve differently on iOS than on Linux, so
+    /// "the tokenizer loads" has to be proven here as well as in TokinoKit's
+    /// own suite. Without the vocabulary and merges, every search would fail.
+    func testTokenizerLoadsItsBundledResourcesOnIOS() throws {
+        let tokenizer = try CLIPTokenizer()
+
+        XCTAssertEqual(tokenizer.startOfTextID, 49406)
+        XCTAssertEqual(tokenizer.endOfTextID, 49407)
+
+        let tokens = tokenizer.encode("a photo of a dog")
+        XCTAssertFalse(tokens.isEmpty)
+
+        // The same model-ready shape the text tower expects.
+        let sequence = tokenizer.tokenize("a photo of a dog")
+        XCTAssertEqual(sequence.count, CLIPTokenizer.contextLength)
+        XCTAssertEqual(sequence.first, tokenizer.startOfTextID)
+    }
+
+    /// The curly apostrophe an iOS keyboard produces must tokenize like a
+    /// straight one. Worth asserting on iOS specifically, since this is where
+    /// that input actually comes from.
+    func testCurlyApostropheNormalisesOnIOS() throws {
+        let tokenizer = try CLIPTokenizer()
+        XCTAssertEqual(
+            tokenizer.encode("don\u{2019}t"),
+            tokenizer.encode("don't")
+        )
+    }
+
+    /// The descriptor's dimensions must match what the schema and the store
+    /// expect, or embeddings would be rejected at write time.
+    func testEmbeddingModelDescriptorMatchesSchema() {
+        let model = EmbeddingModelDescriptor.openCLIPViTB32
+        XCTAssertEqual(model.dimensions, PhotoEmbedding.dimensions)
+        XCTAssertEqual(model.dimensions, 512)
+        XCTAssertEqual(model.inputPixelSize, 224)
+        XCTAssertEqual(model.contextLength, CLIPTokenizer.contextLength)
+        XCTAssertEqual(model.weightsLicense, "MIT")
+        XCTAssertEqual(model.pixelMean.count, 3)
+        XCTAssertEqual(model.pixelStandardDeviation.count, 3)
+    }
+
+    /// Photo access states must map to distinct UI affordances; collapsing
+    /// `limited` into a failure is a common and insulting bug.
+    func testPhotoLibraryAccessSemantics() {
+        XCTAssertTrue(PhotoLibraryAccess.full.canReadLibrary)
+        XCTAssertTrue(PhotoLibraryAccess.limited.canReadLibrary)
+        XCTAssertFalse(PhotoLibraryAccess.denied.canReadLibrary)
+        XCTAssertFalse(PhotoLibraryAccess.notDetermined.canReadLibrary)
+        XCTAssertFalse(PhotoLibraryAccess.restricted.canReadLibrary)
+
+        // Sending a user to Settings for a restriction they cannot change
+        // would be misleading.
+        XCTAssertFalse(PhotoLibraryAccess.restricted.isResolvableInSettings)
+        XCTAssertTrue(PhotoLibraryAccess.denied.isResolvableInSettings)
+        XCTAssertTrue(PhotoLibraryAccess.limited.isResolvableInSettings)
+    }
+
     /// Guards the privacy default: a mock must never be selected once a real
     /// credential exists, on any platform.
     func testMockProvidersAreRefusedWhenACredentialExists() {

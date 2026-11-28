@@ -49,6 +49,11 @@ Thumbs.db
 .vscode/
 
 # ---- Local artefacts ----
+# Converted Core ML models: ~150 MB, produced by tools/convert-openclip.py and
+# distributed as release assets, never committed. See docs/DECISIONS.md.
+/build/
+*.mlpackage/
+*.mlmodelc/
 /tmp/
 *.log
 coverage.xml

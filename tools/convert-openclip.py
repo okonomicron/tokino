@@ -137,6 +137,51 @@ def convert_tower(wrapper, example_input, input_spec, output_name, precision: st
     )
 
 
+def non_finite_const_names(mlmodel) -> list[str]:
+    """Names the constant tensors k-means cannot cluster.
+
+    CLIP's text tower carries its causal attention mask as a 77x77 constant
+    full of negative infinity. k-means calls into scikit-learn, which rejects
+    non-finite input outright, so palettizing it fails the whole conversion
+    with "Input X contains infinity".
+
+    These are discovered by walking the MIL program rather than hardcoding the
+    op name, so a change to the model or to coremltools' naming does not
+    silently reintroduce the failure. Excluding them costs nothing: the mask is
+    about 6k values against millions in the weight matrices, and leaving it at
+    full precision is what we want anyway — quantizing a mask would change
+    where attention is blocked.
+    """
+    import numpy as np
+
+    program = getattr(mlmodel, "_mil_program", None)
+    if program is None:
+        # Without access to the program we cannot be selective. Returning
+        # nothing means palettization is attempted on everything, which fails
+        # loudly rather than silently producing a wrong model.
+        _log("warning: could not inspect the MIL program to exclude mask constants")
+        return []
+
+    names: list[str] = []
+    for function in program.functions.values():
+        for op in function.operations:
+            if op.op_type != "const":
+                continue
+            value = getattr(op, "val", None)
+            value = getattr(value, "val", value)
+            if value is None:
+                continue
+            try:
+                array = np.asarray(value)
+            except Exception:
+                continue
+            if array.dtype.kind != "f":
+                continue
+            if not np.all(np.isfinite(array)):
+                names.append(op.name)
+    return names
+
+
 def palettize(model, bits: int):
     """Palettizes weights to shrink the download.
 
@@ -152,9 +197,17 @@ def palettize(model, bits: int):
         palettize_weights,
     )
 
+    excluded = non_finite_const_names(model)
+    if excluded:
+        _log(f"excluding {len(excluded)} non-finite constant(s): {', '.join(excluded)}")
+
     _log(f"palettizing weights to {bits}-bit")
     config = OptimizationConfig(
-        global_config=OpPalettizerConfig(mode="kmeans", nbits=bits)
+        global_config=OpPalettizerConfig(mode="kmeans", nbits=bits),
+        # A None config per op name means "leave this one alone". op_selector
+        # would be the obvious API but coremltools 9 rejects it outside the
+        # deprecated compression_utils path.
+        op_name_configs={name: None for name in excluded},
     )
     return palettize_weights(model, config)
 
