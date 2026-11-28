@@ -109,7 +109,7 @@ public actor CoreMLEmbedder: ImageEmbedding {
         let model = try loadImageModel()
 
         let input = try MLDictionaryFeatureProvider(dictionary: ["pixel_values": pixels])
-        let output = try model.prediction(from: input)
+        let output = try await model.prediction(from: input)
 
         guard let value = output.featureValue(for: "image_embedding")?.multiArrayValue else {
             throw EmbedderError.unexpectedOutput("no image_embedding feature")
@@ -135,7 +135,7 @@ public actor CoreMLEmbedder: ImageEmbedding {
         }
 
         let input = try MLDictionaryFeatureProvider(dictionary: ["input_ids": array])
-        let output = try model.prediction(from: input)
+        let output = try await model.prediction(from: input)
 
         guard let value = output.featureValue(for: "text_embedding")?.multiArrayValue else {
             throw EmbedderError.unexpectedOutput("no text_embedding feature")

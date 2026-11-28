@@ -1,0 +1,125 @@
+name: Model parity
+
+# Converts the OpenCLIP towers to Core ML and checks the result reproduces the
+# committed PyTorch reference embeddings.
+#
+# A separate workflow, and not on every push, because it downloads ~600 MB of
+# weights and spends several minutes on k-means palettization. It is the only
+# thing that can prove the conversion is sound: coremltools converts on Linux
+# but can only predict() on macOS, so this has to run here.
+#
+# Without it, a bad conversion — a transposed tensor, wrong normalisation,
+# palettization that lost too much — would show up only as search results that
+# are quietly worse than they should be.
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      # Anything that can change the model or what we expect of it.
+      - "tools/convert-openclip.py"
+      - "tools/reference-vectors.py"
+      - "tools/verify-parity.py"
+      - "packages/TokinoKit/Sources/TokinoKit/Search/EmbeddingModel.swift"
+      - "packages/TokinoKit/Tests/TokinoKitTests/Fixtures/model-reference-vectors.json"
+      - ".github/workflows/model-parity.yml"
+
+concurrency:
+  group: model-parity-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  parity:
+    name: Convert and verify
+    runs-on: macos-15
+    # Conversion is CPU-bound and k-means over a 25M-parameter embedding table
+    # is the slow part.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Cache the OpenCLIP weights
+        uses: actions/cache@v4
+        with:
+          # Hugging Face caches downloads here; the weights are ~600 MB and do
+          # not change, so re-downloading them every run is pure waste.
+          path: ~/.cache/huggingface
+          key: openclip-vit-b32-laion2b-weights
+
+      - name: Install the conversion toolchain
+        run: |
+          uv venv tools/.venv
+          # scikit-learn is required by k-means palettization. Without it the
+          # conversion fails late with "Input X contains infinity", which is a
+          # misleading way to learn a dependency is missing.
+          uv pip install --python tools/.venv/bin/python \
+            "coremltools==9.0" "torch==2.*" open_clip_torch scikit-learn numpy
+
+      - name: Convert both towers
+        run: |
+          tools/.venv/bin/python tools/convert-openclip.py \
+            --output-dir build/models --precision fp16 --palettize-bits 8
+
+      - name: Show what was produced
+        run: |
+          cat build/models/manifest.json
+          du -sh build/models/*.mlpackage
+
+      - name: Verify the manifest matches the committed descriptor
+        # Catches a silent drift between what the conversion produces and what
+        # the app expects, which would otherwise surface as a failed checksum
+        # on a user's first run.
+        run: |
+          tools/.venv/bin/python - <<'PY'
+          import json, pathlib, re, sys
+
+          manifest = json.loads(pathlib.Path("build/models/manifest.json").read_text())
+          swift = pathlib.Path(
+              "packages/TokinoKit/Sources/TokinoKit/Search/EmbeddingModel.swift"
+          ).read_text()
+
+          problems = []
+          for field in ("dimensions", "inputPixelSize", "contextLength"):
+              if str(manifest[field]) not in swift:
+                  problems.append(f"{field}={manifest[field]} is not in the Swift descriptor")
+
+          # Checksums are expected to match only when the conversion is
+          # reproducible; report rather than fail, since k-means is seeded by
+          # scikit-learn and may differ across platforms.
+          for tower in ("imageEncoder", "textEncoder"):
+              digest = manifest[tower]["sha256"]
+              status = "matches" if digest in swift else "DIFFERS from"
+              print(f"{tower} checksum {status} the committed descriptor")
+
+          if problems:
+              for problem in problems:
+                  print(f"ERROR: {problem}")
+              sys.exit(1)
+          print("descriptor is consistent with the manifest")
+          PY
+
+      - name: Verify parity against the PyTorch reference
+        run: |
+          tools/.venv/bin/python tools/verify-parity.py \
+            --models build/models \
+            --reference packages/TokinoKit/Tests/TokinoKitTests/Fixtures/model-reference-vectors.json
+
+      - name: Upload the converted models
+        # So a verified conversion can be published as a release asset without
+        # re-running this, and so a failure can be inspected locally.
+        uses: actions/upload-artifact@v4
+        with:
+          name: openclip-coreml
+          path: |
+            build/models/*.mlpackage.zip
+            build/models/manifest.json
+          retention-days: 14
+          if-no-files-found: error
