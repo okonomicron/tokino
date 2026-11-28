@@ -385,6 +385,88 @@ struct SimilaritySearchTests {
         )
     }
 
+    // MARK: - Explaining an empty result set
+
+    /// An empty grid has three very different causes and only one of them means
+    /// "try different words". Telling them apart is what makes the UI useful.
+    @Test("an un-indexed library is diagnosed as such, not as a failed search")
+    func nothingIndexedDiagnosis() {
+        let diagnosis = EmptyResultDiagnosis.diagnose(
+            candidates: [], admitted: [], criteria: .init()
+        )
+        #expect(diagnosis == .nothingIndexed)
+    }
+
+    @Test("searchable photos that simply did not match are not blamed on filters")
+    func noGoodMatchDiagnosis() {
+        let candidate = Self.candidate(.deterministic(from: "a"), vector: Self.oneHot(0))
+        let diagnosis = EmptyResultDiagnosis.diagnose(
+            candidates: [candidate], admitted: [candidate], criteria: .init()
+        )
+        #expect(diagnosis == .noGoodMatch)
+    }
+
+    @Test("the dominant filter reason is reported when everything is excluded")
+    func dominantFilterReasonReported() {
+        // Four excluded by the user, one below the quality floor. The user
+        // exclusion should be named, since it accounts for most of them.
+        var candidates = (0..<4).map {
+            Self.candidate(.deterministic(from: "x\($0)"), vector: Self.oneHot(0), excluded: true)
+        }
+        candidates.append(
+            Self.candidate(.deterministic(from: "q"), vector: Self.oneHot(0), quality: 0.0)
+        )
+
+        let criteria = PhotoSelectionCriteria(minimumQuality: 0.5)
+        let diagnosis = EmptyResultDiagnosis.diagnose(
+            candidates: candidates,
+            admitted: AssetCriteriaFilter.apply(to: candidates, criteria: criteria),
+            criteria: criteria
+        )
+        #expect(diagnosis == .everythingFiltered(dominantReason: .excludedByUser))
+    }
+
+    /// A message that flips between two equally common causes on each search
+    /// reads as a bug.
+    @Test("a tie between reasons resolves deterministically")
+    func tiedReasonsAreStable() {
+        let candidates = [
+            Self.candidate(.deterministic(from: "a"), vector: Self.oneHot(0), excluded: true),
+            Self.candidate(.deterministic(from: "b"), vector: Self.oneHot(0), quality: 0.0),
+        ]
+        let criteria = PhotoSelectionCriteria(minimumQuality: 0.5)
+
+        let first = EmptyResultDiagnosis.diagnose(
+            candidates: candidates,
+            admitted: [],
+            criteria: criteria
+        )
+        let reversed = EmptyResultDiagnosis.diagnose(
+            candidates: candidates.reversed(),
+            admitted: [],
+            criteria: criteria
+        )
+        #expect(first == reversed)
+    }
+
+    @Test("a date filter that excludes everything is named as the cause")
+    func dateFilterDiagnosis() {
+        let candidates = (0..<3).map {
+            Self.candidate(
+                .deterministic(from: "d\($0)"),
+                vector: Self.oneHot(0),
+                createdAt: Self.t0
+            )
+        }
+        let criteria = PhotoSelectionCriteria(earliestDate: Self.t0.addingTimeInterval(86400))
+        let diagnosis = EmptyResultDiagnosis.diagnose(
+            candidates: candidates,
+            admitted: AssetCriteriaFilter.apply(to: candidates, criteria: criteria),
+            criteria: criteria
+        )
+        #expect(diagnosis == .everythingFiltered(dominantReason: .beforeEarliestDate))
+    }
+
     // MARK: - Combined search
 
     @Test("search filters before ranking")

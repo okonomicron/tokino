@@ -223,3 +223,56 @@ public enum SimilaritySearch {
         )
     }
 }
+
+/// Explains why a search returned nothing.
+///
+/// Three quite different situations produce an empty grid, and only one of them
+/// means "try different words":
+///
+/// - nothing has been indexed yet,
+/// - everything was filtered out by the strategy's criteria,
+/// - photos were searchable but none matched well enough.
+///
+/// Deciding which applies is logic, so it lives here and is tested on Linux.
+/// Turning the answer into a sentence is presentation and stays in the UI.
+public enum EmptyResultDiagnosis: Sendable, Hashable {
+    /// No candidates at all; the library has not been indexed.
+    case nothingIndexed
+    /// Candidates existed but every one was filtered out. Carries the reason
+    /// that accounted for the most of them, since listing all of them is noise.
+    case everythingFiltered(dominantReason: AssetCriteriaFilter.Rejection)
+    /// Photos were searchable and simply did not match.
+    case noGoodMatch
+
+    /// Diagnoses an empty result set.
+    ///
+    /// - Parameters:
+    ///   - candidates: every candidate considered, before filtering.
+    ///   - admitted: those the criteria allowed through.
+    public static func diagnose(
+        candidates: [SearchCandidate],
+        admitted: [SearchCandidate],
+        criteria: PhotoSelectionCriteria
+    ) -> EmptyResultDiagnosis {
+        if candidates.isEmpty { return .nothingIndexed }
+        if !admitted.isEmpty { return .noGoodMatch }
+
+        var counts: [AssetCriteriaFilter.Rejection: Int] = [:]
+        for candidate in candidates {
+            if let rejection = AssetCriteriaFilter.rejection(for: candidate, criteria: criteria) {
+                counts[rejection, default: 0] += 1
+            }
+        }
+
+        // Ties break on the reason's raw value so the message is stable
+        // between runs rather than flipping between two equally common causes.
+        let dominant = counts
+            .sorted { lhs, rhs in
+                lhs.value != rhs.value ? lhs.value > rhs.value : lhs.key.rawValue < rhs.key.rawValue
+            }
+            .first?.key
+
+        guard let dominant else { return .noGoodMatch }
+        return .everythingFiltered(dominantReason: dominant)
+    }
+}

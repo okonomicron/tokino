@@ -29,26 +29,44 @@ public actor LocalVectorStore: EmbeddingStore {
         }
     }
 
-    private var handle: OpaquePointer?
+    /// Owns the raw `sqlite3` pointer and closes it.
+    ///
+    /// A separate class because an actor's `deinit` is nonisolated and so
+    /// cannot touch the actor's own non-Sendable state — Swift 6 rejects
+    /// reading an `OpaquePointer?` there. Giving the pointer its own owner means
+    /// the close happens in *that* type's deinit, which has no isolation to
+    /// cross. The actor keeps it alive and serialises every use.
+    private final class Connection {
+        let pointer: OpaquePointer
+
+        init(pointer: OpaquePointer) {
+            self.pointer = pointer
+        }
+
+        deinit {
+            sqlite3_close_v2(pointer)
+        }
+    }
+
+    private let connection: Connection
     private let path: String
+
+    /// The raw pointer, for the query helpers below.
+    private var handle: OpaquePointer { connection.pointer }
 
     /// Opens, or creates, the index at `url`.
     public init(url: URL) throws {
         self.path = url.path
 
-        var handle: OpaquePointer?
+        var pointer: OpaquePointer?
         let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX
-        guard sqlite3_open_v2(path, &handle, flags, nil) == SQLITE_OK, let handle else {
+        guard sqlite3_open_v2(path, &pointer, flags, nil) == SQLITE_OK, let pointer else {
             throw StoreError.cannotOpen(path)
         }
-        self.handle = handle
+        self.connection = Connection(pointer: pointer)
 
-        try Self.configure(handle)
-        try Self.migrate(handle)
-    }
-
-    deinit {
-        if let handle { sqlite3_close_v2(handle) }
+        try Self.configure(pointer)
+        try Self.migrate(pointer)
     }
 
     private static func configure(_ handle: OpaquePointer) throws {
@@ -135,7 +153,7 @@ public actor LocalVectorStore: EmbeddingStore {
     }
 
     public func store(_ embeddings: [StoredEmbedding]) async throws {
-        guard !embeddings.isEmpty, let handle else { return }
+        guard !embeddings.isEmpty else { return }
 
         // One transaction per batch, so an interrupted scan leaves the store
         // consistent rather than half-written. ScanEngine writes here before
@@ -191,7 +209,7 @@ public actor LocalVectorStore: EmbeddingStore {
     }
 
     public func remove(localIdentifiers: [String]) async throws {
-        guard !localIdentifiers.isEmpty, let handle else { return }
+        guard !localIdentifiers.isEmpty else { return }
 
         try Self.execute(handle, "BEGIN IMMEDIATE;")
         do {
@@ -226,7 +244,7 @@ public actor LocalVectorStore: EmbeddingStore {
     /// Separate from `store` because metadata comes from PhotoKit while vectors
     /// come from Core ML, and the two are gathered at different points.
     public func storeMetadata(_ metadata: [String: PhotoAssetMetadata]) throws {
-        guard !metadata.isEmpty, let handle else { return }
+        guard !metadata.isEmpty else { return }
 
         try Self.execute(handle, "BEGIN IMMEDIATE;")
         do {
@@ -295,7 +313,7 @@ public actor LocalVectorStore: EmbeddingStore {
 
     /// Marks assets the user has excluded from all strategies.
     public func setExcluded(_ excluded: Bool, for localIdentifiers: [String]) throws {
-        guard !localIdentifiers.isEmpty, let handle else { return }
+        guard !localIdentifiers.isEmpty else { return }
         let sql = "UPDATE asset_metadata SET is_excluded = ? WHERE local_identifier = ?;"
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(handle, sql, -1, &statement, nil) == SQLITE_OK, let statement
@@ -396,7 +414,6 @@ public actor LocalVectorStore: EmbeddingStore {
     }
 
     public func saveCheckpointData(_ data: Data) throws {
-        guard let handle else { return }
         let sql = """
             INSERT INTO scan_state (id, checkpoint) VALUES (1, ?)
             ON CONFLICT(id) DO UPDATE SET checkpoint = excluded.checkpoint;
@@ -415,7 +432,6 @@ public actor LocalVectorStore: EmbeddingStore {
     }
 
     public func clearCheckpoint() throws {
-        guard let handle else { return }
         try Self.execute(handle, "DELETE FROM scan_state WHERE id = 1;")
     }
 
@@ -426,7 +442,6 @@ public actor LocalVectorStore: EmbeddingStore {
         bind: ((OpaquePointer) -> Void)? = nil,
         row: (OpaquePointer) -> Void
     ) throws {
-        guard let handle else { return }
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(handle, sql, -1, &statement, nil) == SQLITE_OK, let statement
         else { throw StoreError.sqlite(lastErrorMessage()) }
@@ -446,7 +461,7 @@ public actor LocalVectorStore: EmbeddingStore {
     }
 
     private func lastErrorMessage() -> String {
-        guard let handle, let message = sqlite3_errmsg(handle) else { return "unknown" }
+        guard let message = sqlite3_errmsg(handle) else { return "unknown" }
         return String(cString: message)
     }
 

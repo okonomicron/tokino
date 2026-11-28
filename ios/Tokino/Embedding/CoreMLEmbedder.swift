@@ -14,7 +14,18 @@ import UIKit
 /// Two towers, loaded independently. The image tower runs once per photo during
 /// a scan; the text tower runs once per search query. Loading the text tower
 /// lazily means a scan does not pay for it.
-public actor CoreMLEmbedder: ImageEmbedding {
+///
+/// **Not an actor**, which was the first instinct. `MLModel` and
+/// `MLDictionaryFeatureProvider` are not `Sendable`, so an actor cannot call
+/// into them: every prediction would "send" a non-Sendable value across the
+/// isolation boundary, which Swift 6 rejects. A class keeps the model inside a
+/// single context.
+///
+/// `@unchecked Sendable` is justified rather than convenient: Apple documents
+/// `MLModel` prediction as thread-safe, and the only mutable state here is the
+/// two lazily-loaded handles, which the lock guards. The lock is never held
+/// across a prediction, so concurrent embedding still runs in parallel.
+public final class CoreMLEmbedder: ImageEmbedding, @unchecked Sendable {
 
     public enum EmbedderError: Error, CustomStringConvertible {
         case modelMissing(String)
@@ -40,11 +51,9 @@ public actor CoreMLEmbedder: ImageEmbedding {
     private var imageModel: MLModel?
     private var textModel: MLModel?
 
-    // nonisolated: these read `descriptor`, which is a `let`, so no isolation
-    // is needed and the protocol can stay synchronous for callers.
-    public nonisolated var modelIdentifier: String { descriptor.identifier }
-    public nonisolated var dimensions: Int { descriptor.dimensions }
-    public nonisolated var preferredInputPixelSize: Int { descriptor.inputPixelSize }
+    public var modelIdentifier: String { descriptor.identifier }
+    public var dimensions: Int { descriptor.dimensions }
+    public var preferredInputPixelSize: Int { descriptor.inputPixelSize }
 
     public init(
         descriptor: EmbeddingModelDescriptor,
@@ -68,7 +77,10 @@ public actor CoreMLEmbedder: ImageEmbedding {
     }
 
     private func loadImageModel() throws -> MLModel {
+        lock.lock()
+        defer { lock.unlock() }
         if let imageModel { return imageModel }
+
         guard FileManager.default.fileExists(atPath: imageModelURL.path) else {
             throw EmbedderError.modelMissing(imageModelURL.path)
         }
@@ -82,7 +94,10 @@ public actor CoreMLEmbedder: ImageEmbedding {
     }
 
     private func loadTextModel() throws -> MLModel {
+        lock.lock()
+        defer { lock.unlock() }
         if let textModel { return textModel }
+
         guard FileManager.default.fileExists(atPath: textModelURL.path) else {
             throw EmbedderError.modelMissing(textModelURL.path)
         }
