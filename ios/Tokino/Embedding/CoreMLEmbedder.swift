@@ -21,10 +21,10 @@ import UIKit
 /// isolation boundary, which Swift 6 rejects. A class keeps the model inside a
 /// single context.
 ///
-/// `@unchecked Sendable` is justified rather than convenient: Apple documents
-/// `MLModel` prediction as thread-safe, and the only mutable state here is the
-/// two lazily-loaded handles, which the lock guards. The lock is never held
-/// across a prediction, so concurrent embedding still runs in parallel.
+/// `@unchecked Sendable` is justified rather than convenient: there is no
+/// mutable state — both models are `let` — and Apple documents `MLModel`
+/// prediction as thread-safe. The annotation is needed only because `MLModel`
+/// itself is not declared `Sendable`.
 public final class CoreMLEmbedder: ImageEmbedding, @unchecked Sendable {
 
     public enum EmbedderError: Error, CustomStringConvertible {
@@ -48,74 +48,74 @@ public final class CoreMLEmbedder: ImageEmbedding, @unchecked Sendable {
     private let imageModelURL: URL
     private let textModelURL: URL
 
-    /// Guards the two lazily-loaded handles, which are the only mutable state.
-    /// Never held across a prediction, so concurrent embedding still runs in
-    /// parallel.
-    private let lock = NSLock()
-    private var imageModel: MLModel?
-    private var textModel: MLModel?
+    // Both towers are loaded before the instance exists, so there is no
+    // mutable state at all. The lazy-plus-lock version this replaces could not
+    // work: NSLock is unavailable from async contexts, and the loads are
+    // reached from async code. Immutability is the simpler answer, and the
+    // memory cost is modest — about 137 MB of model, which is needed for a
+    // scan or a search anyway.
+    private let imageModel: MLModel
+    private let textModel: MLModel
 
     public var modelIdentifier: String { descriptor.identifier }
     public var dimensions: Int { descriptor.dimensions }
     public var preferredInputPixelSize: Int { descriptor.inputPixelSize }
 
-    public init(
+    private init(
         descriptor: EmbeddingModelDescriptor,
         imageModelURL: URL,
-        textModelURL: URL
+        textModelURL: URL,
+        imageModel: MLModel,
+        textModel: MLModel
     ) {
         self.descriptor = descriptor
         self.imageModelURL = imageModelURL
         self.textModelURL = textModelURL
+        self.imageModel = imageModel
+        self.textModel = textModel
     }
 
-    // MARK: - Model loading
-
-    private func configuration() -> MLModelConfiguration {
+    /// Loads both towers and returns a ready embedder.
+    ///
+    /// Async and failable because compiling a downloaded `.mlpackage` is real
+    /// work that can fail — a missing download, a corrupt file, an OS that
+    /// cannot compile it. Doing it here means a missing model is reported
+    /// during onboarding rather than part-way through a scan.
+    public static func make(
+        descriptor: EmbeddingModelDescriptor,
+        imageModelURL: URL,
+        textModelURL: URL
+    ) async throws -> CoreMLEmbedder {
         let configuration = MLModelConfiguration()
         // .all lets Core ML use the Neural Engine, which is the whole point:
-        // the ANE is both far faster and far more power-efficient than the CPU
-        // for this, and a library scan is thousands of inferences.
+        // the ANE is far faster and far more power-efficient than the CPU here,
+        // and a library scan is thousands of inferences.
         configuration.computeUnits = .all
-        return configuration
+
+        let imageModel = try await loadModel(at: imageModelURL, configuration: configuration)
+        let textModel = try await loadModel(at: textModelURL, configuration: configuration)
+
+        return CoreMLEmbedder(
+            descriptor: descriptor,
+            imageModelURL: imageModelURL,
+            textModelURL: textModelURL,
+            imageModel: imageModel,
+            textModel: textModel
+        )
     }
 
-    private func loadImageModel() throws -> MLModel {
-        lock.lock()
-        defer { lock.unlock() }
-        if let imageModel { return imageModel }
-
-        guard FileManager.default.fileExists(atPath: imageModelURL.path) else {
-            throw EmbedderError.modelMissing(imageModelURL.path)
+    private static func loadModel(
+        at url: URL,
+        configuration: MLModelConfiguration
+    ) async throws -> MLModel {
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            throw EmbedderError.modelMissing(url.path)
         }
         // compileModel is required for a downloaded .mlpackage: Core ML needs a
         // compiled .mlmodelc, and shipping the compiled form is not portable
         // across OS versions.
-        let compiled = try MLModel.compileModel(at: imageModelURL)
-        let model = try MLModel(contentsOf: compiled, configuration: configuration())
-        imageModel = model
-        return model
-    }
-
-    private func loadTextModel() throws -> MLModel {
-        lock.lock()
-        defer { lock.unlock() }
-        if let textModel { return textModel }
-
-        guard FileManager.default.fileExists(atPath: textModelURL.path) else {
-            throw EmbedderError.modelMissing(textModelURL.path)
-        }
-        let compiled = try MLModel.compileModel(at: textModelURL)
-        let model = try MLModel(contentsOf: compiled, configuration: configuration())
-        textModel = model
-        return model
-    }
-
-    /// Loads both towers up front, so a scan does not stall on first use and a
-    /// missing model is reported during onboarding rather than mid-scan.
-    public func warmUp() throws {
-        _ = try loadImageModel()
-        _ = try loadTextModel()
+        let compiled = try await MLModel.compileModel(at: url)
+        return try MLModel(contentsOf: compiled, configuration: configuration)
     }
 
     // MARK: - Image embedding
@@ -125,10 +125,9 @@ public final class CoreMLEmbedder: ImageEmbedding, @unchecked Sendable {
             throw EmbedderError.imageDecodeFailed
         }
         let pixels = try pixelBuffer(from: image)
-        let model = try loadImageModel()
 
         let input = try MLDictionaryFeatureProvider(dictionary: ["pixel_values": pixels])
-        let output = try await model.prediction(from: input)
+        let output = try await imageModel.prediction(from: input)
 
         guard let value = output.featureValue(for: "image_embedding")?.multiArrayValue else {
             throw EmbedderError.unexpectedOutput("no image_embedding feature")
@@ -141,8 +140,6 @@ public final class CoreMLEmbedder: ImageEmbedding, @unchecked Sendable {
     /// The caller tokenizes with `CLIPTokenizer`, which is in TokinoKit so its
     /// correctness is tested on Linux against open_clip's own output.
     public func embed(tokenIDs: [Int]) async throws -> [Float] {
-        let model = try loadTextModel()
-
         let array = try MLMultiArray(
             shape: [1, NSNumber(value: descriptor.contextLength)],
             dataType: .int32
@@ -154,7 +151,7 @@ public final class CoreMLEmbedder: ImageEmbedding, @unchecked Sendable {
         }
 
         let input = try MLDictionaryFeatureProvider(dictionary: ["input_ids": array])
-        let output = try await model.prediction(from: input)
+        let output = try await textModel.prediction(from: input)
 
         guard let value = output.featureValue(for: "text_embedding")?.multiArrayValue else {
             throw EmbedderError.unexpectedOutput("no text_embedding feature")
