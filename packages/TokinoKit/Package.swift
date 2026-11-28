@@ -19,11 +19,15 @@ let package = Package(
     targets: [
         .target(
             name: "TokinoKit",
+            // Copied rather than processed: these are opaque data files and
+            // SwiftPM's resource processing would gain us nothing.
+            resources: [.copy("Resources")],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .testTarget(
             name: "TokinoKitTests",
             dependencies: ["TokinoKit"],
+            resources: [.copy("Fixtures")],
             swiftSettings: [.swiftLanguageMode(.v6)]
         )
     ]
