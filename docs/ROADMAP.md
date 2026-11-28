@@ -23,19 +23,44 @@ stand-in `auth.uid()` for CI and never replaces Supabase's own.
 (real Postgres 16 + pgvector 0.8.7), and 5 iOS XCTest cases on an iOS 26
 simulator — all passing, locally and in CI.
 
-## M2 — Photo discovery
+## M2a — Photo discovery (in progress)
 
-The first milestone with a usable app.
+Split from the original M2 because the background scan and real throughput
+cannot be verified without a device. This covers what CI can prove.
 
-- Onboarding, with the privacy explanation before the permission prompt.
-- PhotoKit enumeration; `PHPersistentChangeToken` confirmed by compiling.
-- Scan via `BGContinuedProcessingTask` with a Live Activity.
-- MobileCLIP-S2 embedding on the Neural Engine; local SQLite index.
-- Sync of vectors and metadata to Supabase.
-- Natural-language photo search.
+**Done and verified:**
 
-**Needs:** nothing external. **Blocked from verifying:** background behaviour,
-which needs a device.
+- `CLIPTokenizer` and `CLIPTextCleaner` — a from-scratch byte-level BPE port,
+  matching `open_clip`'s own output on all 37 reference cases.
+- `SimilaritySearch`, `AssetCriteriaFilter` and `EmptyResultDiagnosis`.
+- `ScanEngine` — resumable, cancellable, condition-gated, with a documented
+  retry policy for failed and iCloud-deferred assets.
+- `IndexSyncPlanner` — push-only diff with deletion propagation.
+- **Model conversion, with parity proven**: OpenCLIP ViT-B/32 to Core ML,
+  all 8 checks at cosine ≥ 0.9992 against PyTorch on a macOS runner.
+  137 MB for both towers at 8-bit.
+- `PHPersistentChangeToken` confirmed by compiling, closing M1's open question.
+
+**Written, being compiled:** onboarding and the permission flow, the PhotoKit
+adapter, the Core ML embedder, the SQLite index, the scan coordinator, and the
+search UI.
+
+**Still to do:** the end-to-end semantic search test on a simulator seeded via
+`simctl addmedia` — the one that proves retrieval works without the user's
+photos or phone — and model hosting so the app can fetch the towers.
+
+**Needs:** nothing external.
+
+## M2b — Background scanning (needs a device)
+
+- `BGContinuedProcessingTask` with the system progress UI. Apple requires
+  submission from the foreground in response to a user action, and background
+  tasks do not run in the simulator at all.
+- Incremental catch-up via `BGProcessingTaskRequest`.
+- Neural Engine throughput and battery cost, measured rather than assumed.
+- A full scan of the user's real library, as the first genuine acceptance test.
+
+**Needs:** Apple Developer enrolment, then TestFlight.
 
 ## M3 — Experience and location intelligence
 
@@ -88,7 +113,8 @@ required for your own account.
 
 Not a milestone, but tracked:
 
-- Read the MobileCLIP **ASCL licence** and confirm it permits commercial use.
+- ~~Read the MobileCLIP ASCL licence~~ — **resolved in M2a**: the weights are
+  research-only and are not used. OpenCLIP ViT-B/32 (MIT) replaced them.
 - Back-port the scan to iOS 18 if a wider audience matters.
 - Instagram **Advanced Access**: App Review plus Business Verification, 2–4
   weeks.

@@ -15,8 +15,15 @@ everything else on this page.
 | 20,000 photos | **$0** | ~20–40 min |
 | 100,000 photos | **$0** | ~2–3 hours |
 
-MobileCLIP-S2 runs on the Neural Engine. The time is dominated by loading
-thumbnails, not by inference. Estimates to be measured on a real device in M2.
+OpenCLIP ViT-B/32 runs on the Neural Engine. The time is dominated by loading
+thumbnails, not by inference — a comparable model measures about 5.6 ms per
+image on the ANE, so the inference itself is a couple of minutes for 20,000
+photos. **Still to be measured on a real device:** the simulator has no Neural
+Engine, so these remain estimates until M2b.
+
+One-off per install: a **137 MB model download** (image tower 79.2 MB, text
+tower 58.1 MB), fetched during onboarding and gated behind the Wi-Fi
+preference. Measured, not estimated.
 
 ## Storage
 

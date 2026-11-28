@@ -96,4 +96,10 @@ before access is requested.
   user-facing flow yet.
 - Rate limiting on `tokino-api`, when it is deployed in M4.
 - Webhook signature verification, when publishing callbacks arrive in M6.
-- Read the MobileCLIP ASCL licence before any public release.
+- ~~Read the MobileCLIP ASCL licence~~ — **resolved**: those weights are
+  licensed for research only and are not used. The embedding weights are now
+  OpenCLIP ViT-B/32 under MIT, redistributed with the required notice in
+  `packages/TokinoKit/Sources/TokinoKit/Resources/NOTICE.md`.
+- Model downloads are verified against a SHA-256 in `EmbeddingModelDescriptor`
+  before use. A model file is executable content as far as the Neural Engine is
+  concerned, and it arrives over the network.

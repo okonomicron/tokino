@@ -25,8 +25,8 @@ specifically to catch topic-shaped hardcoding.
 | Native iOS app, Swift + SwiftUI | M1 skeleton | iOS 26+; not a WebView |
 | Photo library scan, resumable | Logic done, UI in M2 | `ScanPlanner`, `ScanCheckpoint` |
 | Incremental scanning, no rescans | Logic done and tested | deletion detection, dedupe, model upgrades |
-| Semantic index, reused across strategies | M2 | on-device MobileCLIP; index once |
-| Natural-language photo search | M2 | local vector search |
+| Semantic index, reused across strategies | M2a | on-device OpenCLIP ViT-B/32 (MIT); index once |
+| Natural-language photo search | M2a | local vector search; own CLIP tokenizer |
 | Experience reconstruction | M3 | `Experience`, grouping signals |
 | Place matching with confidence | M3 | `PlaceMatch`; never asserts an unverified venue |
 | Prompt-driven strategies | M4 | `ContentStrategy` keeps the prompt verbatim |

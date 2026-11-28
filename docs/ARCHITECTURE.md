@@ -20,7 +20,7 @@ rather than on *whether* anything does.
 iPhone                                  Supabase (direct, under RLS)      tokino-api (M4+)
 ──────                                  ────────────────────────────      ────────────────
 PhotoKit enumerate ─┐
-MobileCLIP encode   ├─> local SQLite ─> photo_asset  (metadata)      ──>  language model
+OpenCLIP encode     ├─> local SQLite ─> photo_asset  (metadata)      ──>  language model
 thumbnails (local)  ┘   instant search  photo_embedding (512 floats)      places
                                         experience, strategy, draft       publishing
          │
@@ -68,8 +68,13 @@ rules that could be tested on Linux instead.
 - **Talks to Supabase directly** using `supabase-swift` and the anon key, with
   Row Level Security enforcing isolation. This is the pattern Supabase is built
   for, and it means Milestones 1 and 2 need nothing deployed.
-- **Embeds on-device** with MobileCLIP-S2 via Core ML on the Neural Engine. Free,
-  private, and the reason indexing a 20,000-photo library costs nothing.
+- **Embeds on-device** with OpenCLIP ViT-B/32 via Core ML on the Neural Engine.
+  Free, private, and the reason indexing a 20,000-photo library costs nothing.
+  MobileCLIP would have been the obvious choice and is licensed for research
+  only; see [DECISIONS.md D14](DECISIONS.md#d14-openclip-vit-b32-instead-of-mobileclip-on-licence-grounds).
+  The weights are not bundled: they are converted by `tools/convert-openclip.py`,
+  published as a release asset, and fetched during onboarding with their
+  SHA-256 verified. 137 MB for both towers.
 - **Keeps a local vector index** in SQLite for instant offline search, in
   addition to syncing vectors to Postgres for backend use.
 - **Scans with `BGContinuedProcessingTask`** (iOS 26): the user starts a scan,
@@ -92,6 +97,54 @@ real integrations.
 Schema, indexes and RLS in `supabase/migrations/`. `pgvector` holds the
 embeddings. `pg_cron` plus `pg_net` will drive the publishing scheduler from
 inside the database — durable, free, and independent of the app.
+
+## Search, and why the tokenizer is in TokinoKit
+
+Natural-language search needs CLIP's text tower, and the tower only takes token
+IDs. Apple ships no text-to-image search API and no CLIP tokenizer, so the
+tokenizer is ours to write — a byte-level BPE implementation with CLIP's exact
+text cleaning.
+
+It lives in `TokinoKit`, not the app, for one reason: **a tokenizer mismatch
+does not fail, it just makes every search slightly worse.** There is no crash
+and no error to notice. The only way to catch it is to compare against a
+reference, so `tools/ref_openclip.py` generates token IDs from `open_clip`'s own
+tokenizer and the Swift implementation is asserted against them on Linux, free,
+on every push.
+
+That comparison earned its keep immediately. `open_clip` splits digits one at a
+time, so "2024" is four tokens where original OpenAI CLIP gives one. It folds
+curly quotes to straight, which matters because **iOS keyboards emit a curly
+apostrophe by default** — without the fold, "don't" typed on a phone lands
+somewhere different in the embedding space from "don't" in training. And it
+applies `html.unescape` twice. A second reference, Hugging Face's
+`CLIPTokenizerFast`, disagrees on 9 of 37 inputs because it skips the cleaning
+step entirely; `open_clip` wins, since it trained these weights.
+
+Ranking is brute-force exact cosine over the whole index. At one user's scale —
+tens of thousands of 512-float vectors, about 40 MB — that is a few tens of
+milliseconds, where an approximate index would add a dependency, a build step
+and recall error to solve a problem we do not have.
+
+## Verifying the model without a Mac in the loop
+
+`coremltools` converts anywhere but can only `predict()` on macOS. So conversion
+correctness is established in two halves:
+
+1. On Linux, `tools/convert-openclip.py` produces the `.mlpackage`s, and
+   `tools/reference-vectors.py` records what the PyTorch model computes for a
+   fixed set of inputs.
+2. On a macOS runner, `tools/verify-parity.py` asserts the converted model
+   reproduces those vectors to cosine ≥ 0.99.
+
+The reference inputs are **synthetic pixels from a formula**, not photographs:
+nothing to license, and no JPEG decoder differences muddying a comparison meant
+to test the conversion. Measured result: all 8 checks at cosine ≥ 0.9992, so
+8-bit palettization costs almost nothing.
+
+What this does *not* prove is that the model finds the right photos. That is a
+separate question, answered by searching a seeded simulator library and
+ultimately by the user's own library.
 
 ## Provider abstraction and the mock rule
 
